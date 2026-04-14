@@ -9,6 +9,10 @@
       content="Monitoramento colaborativo de disponibilidade de combustível em Moçambique"
     />
 
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -385,7 +389,14 @@
       </div>
     </div>
 
+    <script>
+      window.__gmAuthFailed = false;
+      window.gm_authFailure = function () {
+        window.__gmAuthFailed = true;
+      };
+    </script>
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyD3xrJhQ-8CZnJiehZkyoxaKTCfZh4aL2s"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

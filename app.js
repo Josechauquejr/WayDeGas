@@ -193,10 +193,12 @@ const APP = {
   userLat: null,
   userLng: null,
   map: null,
+  mapProvider: "none", // "google" | "leaflet" | "none"
   infoWindow: null,
   markers: {},
   userMarker: null,
   userCircle: null,
+  userLocationLayer: null,
   refreshTimer: null,
   confirmations: {}, // { stationId: count } — persistido em localStorage
 };
@@ -390,26 +392,51 @@ function cacheStations(data) {
 }
 
 /* ─────────────────────────────────────────────
-   MAPA GOOGLE MAPS
+   MAPA GOOGLE MAPS + FALLBACK LEAFLET
 ───────────────────────────────────────────── */
 function initMap() {
-  if (!window.google || !window.google.maps) {
-    const mapEl = document.getElementById("map");
-    if (mapEl) {
-      mapEl.innerHTML =
-        '<div style="padding:16px;color:#f5a623;font-family:Space Mono,monospace">Não foi possível carregar o Google Maps.</div>';
-    }
+  const canUseGoogle =
+    !!window.google && !!window.google.maps && !window.__gmAuthFailed;
+
+  if (canUseGoogle) {
+    APP.mapProvider = "google";
+    APP.map = new google.maps.Map(document.getElementById("map"), {
+      center: { lat: -18.7, lng: 35.3 }, // Centro de Moçambique
+      zoom: 5,
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: true,
+    });
+    APP.infoWindow = new google.maps.InfoWindow();
     return;
   }
 
-  APP.map = new google.maps.Map(document.getElementById("map"), {
-    center: { lat: -18.7, lng: 35.3 }, // Centro de Moçambique
-    zoom: 5,
-    mapTypeControl: false,
-    streetViewControl: false,
-    fullscreenControl: true,
-  });
-  APP.infoWindow = new google.maps.InfoWindow();
+  if (window.L) {
+    APP.mapProvider = "leaflet";
+    APP.map = L.map("map", {
+      center: [-18.7, 35.3],
+      zoom: 5,
+      zoomControl: true,
+      attributionControl: true,
+    });
+
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org">OpenStreetMap</a> &copy; <a href="https://carto.com">CARTO</a>',
+      subdomains: "abcd",
+      maxZoom: 19,
+    }).addTo(APP.map);
+
+    showToast("Google Maps indisponível. A usar mapa alternativo.");
+    return;
+  }
+
+  APP.mapProvider = "none";
+  const mapEl = document.getElementById("map");
+  if (mapEl) {
+    mapEl.innerHTML =
+      '<div style="padding:16px;color:#f5a623;font-family:Space Mono,monospace">Não foi possível carregar nenhum provedor de mapa.</div>';
+  }
 }
 
 /** Cria ícone circular colorido para o marcador */
@@ -421,14 +448,35 @@ function createMarkerIcon(status) {
     unknown: "#8b8b8b",
   };
   const color = colors[status] || "#888";
-  return {
-    path: google.maps.SymbolPath.CIRCLE,
-    scale: 7,
-    fillColor: color,
-    fillOpacity: 1,
-    strokeColor: "#111",
-    strokeWeight: 3,
-  };
+
+  if (APP.mapProvider === "google") {
+    return {
+      path: google.maps.SymbolPath.CIRCLE,
+      scale: 7,
+      fillColor: color,
+      fillOpacity: 1,
+      strokeColor: "#111",
+      strokeWeight: 3,
+    };
+  }
+
+  if (APP.mapProvider === "leaflet") {
+    return L.divIcon({
+      className: "",
+      html: `<div style="
+        width:16px; height:16px;
+        background:${color};
+        border:3px solid rgba(0,0,0,.6);
+        border-radius:50%;
+        box-shadow:0 0 8px ${color}88;
+      "></div>`,
+      iconSize: [16, 16],
+      iconAnchor: [8, 8],
+      popupAnchor: [0, -12],
+    });
+  }
+
+  return null;
 }
 
 function getPopupContent(station) {
@@ -446,28 +494,37 @@ function getPopupContent(station) {
 }
 
 function openStationPopup(stationId) {
-  if (!APP.map || !APP.infoWindow) return;
+  if (!APP.map) return;
   const marker = APP.markers[stationId];
   const station = APP.stations.find((s) => s.id === stationId);
   if (!marker || !station) return;
 
-  APP.infoWindow.setContent(getPopupContent(station));
-  APP.infoWindow.open({
-    map: APP.map,
-    anchor: marker,
-    shouldFocus: false,
-  });
+  if (APP.mapProvider === "google") {
+    if (!APP.infoWindow) return;
+    APP.infoWindow.setContent(getPopupContent(station));
+    APP.infoWindow.open({
+      map: APP.map,
+      anchor: marker,
+      shouldFocus: false,
+    });
+    return;
+  }
+
+  if (APP.mapProvider === "leaflet") {
+    marker.openPopup();
+  }
 }
 
 /** Atualiza marcadores no mapa */
 function updateMapMarkers(stations) {
-  if (!APP.map || !window.google || !window.google.maps) return;
+  if (!APP.map || APP.mapProvider === "none") return;
 
   // Remove marcadores antigos que não existem mais
   const currentIds = new Set(stations.map((s) => s.id));
   for (const [id, marker] of Object.entries(APP.markers)) {
     if (!currentIds.has(id)) {
-      marker.setMap(null);
+      if (APP.mapProvider === "google") marker.setMap(null);
+      if (APP.mapProvider === "leaflet") APP.map.removeLayer(marker);
       delete APP.markers[id];
     }
   }
@@ -477,29 +534,52 @@ function updateMapMarkers(stations) {
     const effectiveStatus = getEffectiveStatus(s);
     const position = { lat: s.lat, lng: s.lng };
 
-    if (APP.markers[s.id]) {
-      APP.markers[s.id].setPosition(position);
-      APP.markers[s.id].setIcon(createMarkerIcon(effectiveStatus));
-      APP.markers[s.id].setTitle(s.name);
-    } else {
-      APP.markers[s.id] = new google.maps.Marker({
-        position,
-        map: APP.map,
-        title: s.name,
-        icon: createMarkerIcon(effectiveStatus),
-      });
+    if (APP.mapProvider === "google") {
+      if (APP.markers[s.id]) {
+        APP.markers[s.id].setPosition(position);
+        APP.markers[s.id].setIcon(createMarkerIcon(effectiveStatus));
+        APP.markers[s.id].setTitle(s.name);
+      } else {
+        APP.markers[s.id] = new google.maps.Marker({
+          position,
+          map: APP.map,
+          title: s.name,
+          icon: createMarkerIcon(effectiveStatus),
+        });
+      }
+
+      google.maps.event.clearInstanceListeners(APP.markers[s.id]);
+      APP.markers[s.id].addListener("click", () => openStationPopup(s.id));
+      return;
     }
 
-    google.maps.event.clearInstanceListeners(APP.markers[s.id]);
-    APP.markers[s.id].addListener("click", () => openStationPopup(s.id));
+    const leafletPosition = [s.lat, s.lng];
+    if (APP.markers[s.id]) {
+      APP.markers[s.id].setLatLng(leafletPosition);
+      APP.markers[s.id].setIcon(createMarkerIcon(effectiveStatus));
+      APP.markers[s.id].setPopupContent(getPopupContent(s));
+    } else {
+      APP.markers[s.id] = L.marker(leafletPosition, {
+        icon: createMarkerIcon(effectiveStatus),
+      })
+        .addTo(APP.map)
+        .bindPopup(getPopupContent(s));
+    }
   });
 }
 
 /** Foca o mapa numa bomba específica */
 function focusStation(station) {
   if (!APP.map || !station.lat || !station.lng) return;
-  APP.map.panTo({ lat: station.lat, lng: station.lng });
-  APP.map.setZoom(14);
+
+  if (APP.mapProvider === "google") {
+    APP.map.panTo({ lat: station.lat, lng: station.lng });
+    APP.map.setZoom(14);
+    openStationPopup(station.id);
+    return;
+  }
+
+  APP.map.flyTo([station.lat, station.lng], 14, { duration: 1.2 });
   openStationPopup(station.id);
 }
 
@@ -507,60 +587,85 @@ function fitMapToStations(
   stations,
   { includeUser = false, maxZoom = 14 } = {},
 ) {
-  if (!APP.map || !window.google || !window.google.maps) return;
+  if (!APP.map || APP.mapProvider === "none") return;
 
-  const bounds = new google.maps.LatLngBounds();
-  let totalPoints = 0;
-  let firstPoint = null;
+  if (APP.mapProvider === "google") {
+    const bounds = new google.maps.LatLngBounds();
+    let totalPoints = 0;
+    let firstPoint = null;
 
-  stations.forEach((s) => {
-    if (!s.lat || !s.lng) return;
-    const point = { lat: s.lat, lng: s.lng };
-    bounds.extend(point);
-    totalPoints += 1;
-    if (!firstPoint) firstPoint = point;
-  });
+    stations.forEach((s) => {
+      if (!s.lat || !s.lng) return;
+      const point = { lat: s.lat, lng: s.lng };
+      bounds.extend(point);
+      totalPoints += 1;
+      if (!firstPoint) firstPoint = point;
+    });
 
-  if (includeUser && APP.userLat !== null && APP.userLng !== null) {
-    const point = { lat: APP.userLat, lng: APP.userLng };
-    bounds.extend(point);
-    totalPoints += 1;
-    if (!firstPoint) firstPoint = point;
+    if (includeUser && APP.userLat !== null && APP.userLng !== null) {
+      const point = { lat: APP.userLat, lng: APP.userLng };
+      bounds.extend(point);
+      totalPoints += 1;
+      if (!firstPoint) firstPoint = point;
+    }
+
+    if (!totalPoints || !firstPoint) return;
+    if (totalPoints === 1) {
+      APP.map.panTo(firstPoint);
+      APP.map.setZoom(maxZoom);
+      return;
+    }
+
+    APP.map.fitBounds(bounds, 60);
+    google.maps.event.addListenerOnce(APP.map, "idle", () => {
+      if (APP.map.getZoom() > maxZoom) APP.map.setZoom(maxZoom);
+    });
+    return;
   }
 
-  if (!totalPoints || !firstPoint) return;
-  if (totalPoints === 1) {
-    APP.map.panTo(firstPoint);
+  const points = stations
+    .filter((s) => s.lat && s.lng)
+    .map((s) => [s.lat, s.lng]);
+
+  if (includeUser && APP.userLat !== null && APP.userLng !== null) {
+    points.push([APP.userLat, APP.userLng]);
+  }
+
+  if (!points.length) return;
+  if (points.length === 1) {
+    APP.map.flyTo(points[0], maxZoom, { duration: 0.9 });
     APP.map.setZoom(maxZoom);
     return;
   }
 
-  APP.map.fitBounds(bounds, 60);
-  google.maps.event.addListenerOnce(APP.map, "idle", () => {
-    if (APP.map.getZoom() > maxZoom) APP.map.setZoom(maxZoom);
-  });
+  const bounds = L.latLngBounds(points);
+  APP.map.fitBounds(bounds.pad(0.25), { maxZoom });
 }
 
 function focusMapForCurrentFilter(stations) {
   if (!APP.map) return;
 
+  const flyTo = (lat, lng, zoom) => {
+    if (APP.mapProvider === "google") {
+      APP.map.panTo({ lat, lng });
+      APP.map.setZoom(zoom);
+      return;
+    }
+    APP.map.flyTo([lat, lng], zoom, { duration: 0.9 });
+  };
+
   if (APP.activeFilter === "maputo") {
     if (stations.some((s) => s.lat && s.lng)) {
       fitMapToStations(stations, { maxZoom: CONFIG.MAPUTO_ZOOM + 1 });
     } else {
-      APP.map.panTo({
-        lat: CONFIG.MAPUTO_CENTER[0],
-        lng: CONFIG.MAPUTO_CENTER[1],
-      });
-      APP.map.setZoom(CONFIG.MAPUTO_ZOOM);
+      flyTo(CONFIG.MAPUTO_CENTER[0], CONFIG.MAPUTO_CENTER[1], CONFIG.MAPUTO_ZOOM);
     }
     return;
   }
 
   if (APP.activeFilter === "near") {
     if (!stations.length && APP.userLat !== null && APP.userLng !== null) {
-      APP.map.panTo({ lat: APP.userLat, lng: APP.userLng });
-      APP.map.setZoom(12);
+      flyTo(APP.userLat, APP.userLng, 12);
       return;
     }
 
@@ -791,10 +896,10 @@ function requestGeolocation() {
       APP.userLng = pos.coords.longitude;
 
       // Adiciona/atualiza marcador da localização do utilizador
-      if (APP.userMarker) APP.userMarker.setMap(null);
-      if (APP.userCircle) APP.userCircle.setMap(null);
+      if (APP.mapProvider === "google") {
+        if (APP.userMarker) APP.userMarker.setMap(null);
+        if (APP.userCircle) APP.userCircle.setMap(null);
 
-      if (APP.map && window.google && window.google.maps) {
         const userPosition = { lat: APP.userLat, lng: APP.userLng };
 
         APP.userMarker = new google.maps.Marker({
@@ -833,6 +938,23 @@ function requestGeolocation() {
             shouldFocus: false,
           });
         });
+      } else if (APP.mapProvider === "leaflet" && APP.map) {
+        if (APP.userMarker) APP.map.removeLayer(APP.userMarker);
+        if (APP.userCircle) APP.map.removeLayer(APP.userCircle);
+        if (APP.userLocationLayer) APP.map.removeLayer(APP.userLocationLayer);
+
+        APP.userMarker = L.marker([APP.userLat, APP.userLng]).addTo(APP.map);
+        APP.userCircle = L.circle([APP.userLat, APP.userLng], {
+          color: "#f5a623",
+          fillColor: "#f5a623",
+          fillOpacity: 0.18,
+          radius: CONFIG.NEARBY_RADIUS_KM * 1000,
+        }).addTo(APP.map);
+        APP.userLocationLayer = APP.userCircle;
+
+        APP.userMarker.bindPopup(
+          `A sua localização (${CONFIG.NEARBY_RADIUS_KM} km)`,
+        );
       }
 
       // Activa chip "perto de mim"

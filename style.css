@@ -7,18 +7,18 @@
 
 /* ── TOKENS ── */
 :root {
-  --bg: #0f0f0f;
-  --surface: #1a1a1a;
-  --surface2: #242424;
-  --border: #2e2e2e;
-  --border2: #3a3a3a;
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface2: #f8fafc;
+  --border: #d9e0ea;
+  --border2: #c6d1df;
 
-  --text: #f0ede8;
-  --text-muted: #888;
-  --text-dim: #555;
+  --text: #1f2937;
+  --text-muted: #5a6678;
+  --text-dim: #8b96a7;
 
-  --amber: #f5a623;
-  --amber-dim: #b87a10;
+  --amber: #c97a00;
+  --amber-dim: #9e6200;
 
   --green: #22c55e;
   --green-bg: rgba(34, 197, 94, 0.12);
@@ -37,8 +37,8 @@
 
   --radius: 6px;
   --radius-lg: 12px;
-  --shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+  --shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.1);
 
   --header-h: 120px;
   --controls-h: 90px;
@@ -396,14 +396,7 @@ body {
 }
 
 .station-card::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 4px;
-  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
-  transition: background 0.2s;
+  content: none;
 }
 
 .station-card.available::before {
@@ -423,27 +416,27 @@ body {
 }
 
 .station-card.available:hover {
-  border-color: var(--green-border);
+  border-color: var(--border2);
 }
 .station-card.queue:hover {
-  border-color: var(--yellow-border);
+  border-color: var(--border2);
 }
 .station-card.empty:hover {
-  border-color: var(--red-border);
+  border-color: var(--border2);
 }
 
 /* Status background tint */
 .station-card.available {
-  background: color-mix(in srgb, var(--surface) 90%, var(--green) 10%);
+  background: var(--surface);
 }
 .station-card.queue {
-  background: color-mix(in srgb, var(--surface) 90%, var(--yellow) 10%);
+  background: var(--surface);
 }
 .station-card.empty {
-  background: color-mix(in srgb, var(--surface) 90%, var(--red) 10%);
+  background: var(--surface);
 }
 .station-card.unknown {
-  background: color-mix(in srgb, var(--surface) 92%, #888 8%);
+  background: var(--surface);
 }
 
 .card-top {
@@ -452,7 +445,7 @@ body {
   align-items: flex-start;
   gap: 8px;
   margin-bottom: 6px;
-  padding-left: 8px;
+  padding-left: 0;
 }
 
 .card-name {
@@ -502,7 +495,7 @@ body {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-muted);
-  padding-left: 8px;
+  padding-left: 0;
   margin-bottom: 8px;
 }
 
@@ -510,7 +503,7 @@ body {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  padding-left: 8px;
+  padding-left: 0;
   align-items: center;
 }
 
@@ -548,7 +541,7 @@ body {
   align-items: center;
   margin-top: 10px;
   padding-top: 10px;
-  padding-left: 8px;
+  padding-left: 0;
   border-top: 1px solid var(--border);
 }
 
@@ -615,14 +608,14 @@ body {
 #map {
   width: 100%;
   height: 100%;
-  background: #111;
+  background: #e8edf3;
 }
 
 .map-legend {
   position: absolute;
   bottom: 20px;
   right: 10px;
-  background: rgba(15, 15, 15, 0.9);
+  background: rgba(255, 255, 255, 0.94);
   border: 1px solid var(--border2);
   border-radius: var(--radius);
   padding: 8px 12px;
@@ -659,6 +652,29 @@ body {
 
 #map .gm-style .gm-style-iw-d {
   color: var(--text);
+}
+
+/* Leaflet popups (fallback) */
+.leaflet-container {
+  background: #1a1a1a !important;
+  font-family: var(--font-display) !important;
+}
+
+.leaflet-popup-content-wrapper {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border2) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow) !important;
+}
+
+.leaflet-popup-tip {
+  background: var(--surface) !important;
+}
+
+.leaflet-popup-content {
+  margin: 12px 16px !important;
+  font-family: var(--font-display) !important;
 }
 
 /* ── BUTTONS ── */
