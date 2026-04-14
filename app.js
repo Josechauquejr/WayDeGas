@@ -190,6 +190,7 @@ const APP = {
   filtered: [],
   activeFilter: "all",
   searchQuery: "",
+  mobileMapVisible: false,
   userLat: null,
   userLng: null,
   map: null,
@@ -208,6 +209,60 @@ const APP = {
 ───────────────────────────────────────────── */
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
+
+function isMobileViewport() {
+  return window.matchMedia("(max-width: 900px)").matches;
+}
+
+function syncMapToggleButton() {
+  const btn = $("#toggleMapBtn");
+  if (!btn) return;
+
+  const visible = APP.mobileMapVisible && isMobileViewport();
+  const label = visible ? "Ver lista" : "Ver no mapa";
+  const icon = visible ? "view_list" : "map";
+  btn.innerHTML = `${renderIcon(icon)}<span>${label}</span>`;
+  btn.setAttribute("aria-expanded", visible ? "true" : "false");
+}
+
+function refreshMapAfterLayoutChange() {
+  if (!APP.map) return;
+
+  if (APP.mapProvider === "google" && window.google?.maps) {
+    google.maps.event.trigger(APP.map, "resize");
+  }
+
+  if (APP.mapProvider === "leaflet" && APP.map.invalidateSize) {
+    APP.map.invalidateSize();
+  }
+
+  focusMapForCurrentFilter(APP.filtered || []);
+}
+
+function setMobileMapVisible(visible) {
+  const mainLayout = $("#mainLayout");
+  if (!mainLayout) return;
+
+  APP.mobileMapVisible = !!visible && isMobileViewport();
+  mainLayout.classList.toggle("show-map-mobile", APP.mobileMapVisible);
+  syncMapToggleButton();
+
+  if (APP.mobileMapVisible) {
+    setTimeout(refreshMapAfterLayoutChange, 120);
+  }
+}
+
+function handleViewportForMapToggle() {
+  const mainLayout = $("#mainLayout");
+  if (!mainLayout) return;
+
+  if (!isMobileViewport()) {
+    APP.mobileMapVisible = false;
+    mainLayout.classList.remove("show-map-mobile");
+  }
+
+  syncMapToggleButton();
+}
 
 /** Formata duração em minutos/horas desde timestamp */
 function timeAgo(isoString) {
@@ -757,7 +812,15 @@ function renderList(stations) {
       )
         return;
       const station = APP.stations.find((s) => s.id === card.dataset.id);
-      if (station) focusStation(station);
+      if (!station) return;
+
+      if (isMobileViewport() && !APP.mobileMapVisible) {
+        setMobileMapVisible(true);
+        setTimeout(() => focusStation(station), 150);
+        return;
+      }
+
+      focusStation(station);
     });
     card.addEventListener("keydown", (e) => {
       if (e.key === "Enter") card.click();
@@ -1177,6 +1240,20 @@ function initEventListeners() {
     applyFilters();
   });
 
+  // Toggle do mapa no mobile
+  $("#toggleMapBtn")?.addEventListener("click", () => {
+    setMobileMapVisible(!APP.mobileMapVisible);
+  });
+
+  window.addEventListener("resize", () => {
+    const wasMobileMapVisible = APP.mobileMapVisible;
+    handleViewportForMapToggle();
+
+    if (!isMobileViewport() || wasMobileMapVisible) {
+      setTimeout(refreshMapAfterLayoutChange, 120);
+    }
+  });
+
   // Chips de filtro
   $$(".chip").forEach((chip) => {
     chip.addEventListener("click", () => {
@@ -1273,6 +1350,8 @@ async function init() {
   loadConfirmations();
   initMap();
   initEventListeners();
+  handleViewportForMapToggle();
+  setMobileMapVisible(false);
   requestGeolocation();
 
   // Mostrar guia de configuração na primeira visita

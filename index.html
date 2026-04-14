@@ -90,6 +90,10 @@
         <button class="chip" data-filter="maputo">Maputo</button>
         <button class="chip" data-filter="near">Perto de mim</button>
       </div>
+      <button type="button" id="toggleMapBtn" class="map-toggle-btn">
+        <span class="material-symbols-outlined icon-inline">map</span>
+        <span>Ver no mapa</span>
+      </button>
       <div
         id="locationBanner"
         class="location-banner hidden"
@@ -97,7 +101,7 @@
       ></div>
     </section>
 
-    <main class="main-layout">
+    <main class="main-layout" id="mainLayout">
       <section class="list-col">
         <div id="loadingSpinner" class="loading-state">
           <div class="spinner"></div>
