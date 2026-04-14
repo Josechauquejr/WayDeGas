@@ -1,0 +1,16 @@
+{
+  "chat.tools.terminal.autoApprove": {
+    "/^cd \"d:\\\\Computer Science\\\\HTML 5\\\\Combustivel\"; python -c \"import pathlib; p=pathlib\\.Path\\('app\\.js'\\); lines=p\\.read_text\\('utf8'\\)\\.split\\('\\\\n'\\); print\\('\\\\n'\\.join\\(f'\\{i\\+1\\}: \\{lines\\[i\\]\\}' for i in range\\(930,955\\)\\)\\)\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd \"d:\\\\Computer Science\\\\HTML 5\\\\Combustivel\"; node -e \"const fs = require\\('fs'\\); const lines = fs\\.readFileSync\\('app\\.js','utf8'\\)\\.split\\(/\\\\r\\?\\\\n/\\); for \\(let i=929;i<954;i\\+\\+\\) console\\.log\\(\\(i\\+1\\)\\+': '\\+lines\\[i\\]\\);\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd \"d:\\\\Computer Science\\\\HTML 5\\\\Combustivel\"; node -e \"const fs=require\\('fs'\\); const path='index\\.html'; let html=fs\\.readFileSync\\(path,'utf8'\\); html=html\\.replace\\('<link href=\\\\\"https://fonts\\.googleapis\\.com/css2\\?family=Space\\+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap\\\\\" rel=\\\\\"stylesheet\\\\\" />','<link href=\\\\\"https://fonts\\.googleapis\\.com/css2\\?family=Space\\+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap\\\\\" rel=\\\\\"stylesheet\\\\\" />\\\\n  <link rel=\\\\\"stylesheet\\\\\" href=\\\\\"https://fonts\\.googleapis\\.com/css2\\?family=Material\\+Symbols\\+Outlined:opsz,wght,FILL,GRAD@20\\.\\.48,400,0,0\\\\\" />'\\); const map=\\{'icon-pump':'local_gas_station','icon-report':'report','icon-search':'search','icon-close':'close','icon-check-circle':'check_circle','icon-clock':'schedule','icon-ban':'block','icon-question':'help_outline','icon-settings':'settings','icon-alert':'warning_amber','icon-note':'note','icon-thumb':'thumb_up','icon-fuel':'local_gas_station','icon-diesel':'oil_barrel'\\}; Object\\.entries\\(map\\)\\.forEach\\(\\(\\[oldn,newn\\]\\)=>\\{ html=html\\.split\\(`<svg class=\\\\\"ui-icon\\\\\"><use href=\\\\\"#\\$\\{oldn\\}\\\\\"></use></svg>`\\)\\.join\\(`<span class=\\\\\"material-symbols-outlined icon-inline\\\\\">\\$\\{newn\\}</span>`\\); \\}\\); fs\\.writeFileSync\\(path, html\\);\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    }
+  }
+}
