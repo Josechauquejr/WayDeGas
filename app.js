@@ -232,6 +232,8 @@ const APP = {
   confirmations: {}, // { stationId: count } — persistido em localStorage
   geocodeCache: {},
   geocoder: null,
+  leafletBaseLayer: null,
+  themeMediaQuery: null,
   placesAutocompleteService: null,
   placesService: null,
   placeSessionToken: null,
@@ -310,7 +312,7 @@ function syncMapToggleButton() {
   const btn = $("#toggleMapBtn");
   if (!btn) return;
 
-  const visible = APP.mobileMapVisible && isMobileViewport();
+  const visible = APP.mobileMapVisible;
   const label = visible ? "Ver lista" : "Ver no mapa";
   const icon = visible ? "view_list" : "map";
   btn.innerHTML = `${renderIcon(icon)}<span>${label}</span>`;
@@ -341,25 +343,109 @@ function setMobileMapVisible(visible) {
   const mainLayout = $("#mainLayout");
   if (!mainLayout) return;
 
-  APP.mobileMapVisible = !!visible && isMobileViewport();
+  APP.mobileMapVisible = !!visible;
   mainLayout.classList.toggle("show-map-mobile", APP.mobileMapVisible);
   syncMapToggleButton();
 
-  if (APP.mobileMapVisible) {
-    setTimeout(refreshMapAfterLayoutChange, 120);
-  }
+  setTimeout(refreshMapAfterLayoutChange, 120);
 }
 
 function handleViewportForMapToggle() {
-  const mainLayout = $("#mainLayout");
-  if (!mainLayout) return;
+  syncMapToggleButton();
+}
 
-  if (!isMobileViewport()) {
-    APP.mobileMapVisible = false;
-    mainLayout.classList.remove("show-map-mobile");
+function buildGoogleMapsDirectionsUrl(station) {
+  const destination = hasCoordinates(station)
+    ? `${Number(station.lat)},${Number(station.lng)}`
+    : [station?.address, station?.neighborhood, station?.city, station?.province]
+        .filter(Boolean)
+        .join(", ");
+  if (!destination) return "";
+
+  return `https://www.google.com/maps/dir/?${new URLSearchParams({
+    api: "1",
+    destination,
+    travelmode: "driving",
+  }).toString()}`;
+}
+
+function prefersDarkMode() {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+const GOOGLE_DARK_MAP_STYLES = [
+  { elementType: "geometry", stylers: [{ color: "#0f1722" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#0f1722" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#8ca0b6" }] },
+  {
+    featureType: "administrative",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#334155" }],
+  },
+  {
+    featureType: "poi",
+    elementType: "labels.text.fill",
+    stylers: [{ color: "#94a3b8" }],
+  },
+  {
+    featureType: "road",
+    elementType: "geometry",
+    stylers: [{ color: "#1e293b" }],
+  },
+  {
+    featureType: "road.arterial",
+    elementType: "geometry",
+    stylers: [{ color: "#243142" }],
+  },
+  {
+    featureType: "road.highway",
+    elementType: "geometry",
+    stylers: [{ color: "#2d3c50" }],
+  },
+  {
+    featureType: "road.highway",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#334155" }],
+  },
+  {
+    featureType: "transit",
+    elementType: "geometry",
+    stylers: [{ color: "#182432" }],
+  },
+  {
+    featureType: "water",
+    elementType: "geometry",
+    stylers: [{ color: "#0b1220" }],
+  },
+];
+
+function applyMapTheme() {
+  const darkMode = prefersDarkMode();
+
+  if (APP.mapProvider === "google" && APP.map?.setOptions) {
+    APP.map.setOptions({
+      styles: darkMode ? GOOGLE_DARK_MAP_STYLES : null,
+    });
   }
 
-  syncMapToggleButton();
+  if (APP.mapProvider === "leaflet" && APP.leafletBaseLayer?.setUrl) {
+    APP.leafletBaseLayer.setUrl(
+      darkMode
+        ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+        : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+    );
+  }
+}
+
+function initThemeWatcher() {
+  APP.themeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  const handler = () => applyMapTheme();
+
+  if (APP.themeMediaQuery.addEventListener) {
+    APP.themeMediaQuery.addEventListener("change", handler);
+  } else if (APP.themeMediaQuery.addListener) {
+    APP.themeMediaQuery.addListener(handler);
+  }
 }
 
 function isValidDateObject(value) {
@@ -884,6 +970,7 @@ function initMap() {
     });
     APP.infoWindow = new google.maps.InfoWindow();
     APP.geocoder = new google.maps.Geocoder();
+    applyMapTheme();
     return;
   }
 
@@ -897,8 +984,10 @@ function initMap() {
       attributionControl: true,
     });
 
-    L.tileLayer(
-      "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+    APP.leafletBaseLayer = L.tileLayer(
+      prefersDarkMode()
+        ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+        : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
       {
         attribution:
           '&copy; <a href="https://www.openstreetmap.org">OpenStreetMap</a> &copy; <a href="https://carto.com">CARTO</a>',
@@ -908,6 +997,7 @@ function initMap() {
     ).addTo(APP.map);
 
     showToast("Google Maps indisponível. A usar mapa alternativo.");
+    applyMapTheme();
     return;
   }
 
@@ -1112,14 +1202,20 @@ function getPopupContent(station) {
   const locationText = getStationLocationText(station, {
     includeAddress: true,
   });
+  const directionsUrl = buildGoogleMapsDirectionsUrl(station);
   return `
-    <div style="min-width:180px">
+    <div class="map-popup-card">
       <strong style="font-size:14px;color:${effectiveStatus === "available" ? "#22c55e" : effectiveStatus === "queue" ? "#eab308" : effectiveStatus === "empty" ? "#ef4444" : "#aaa"}">${station.name}</strong><br/>
-      <span style="font-size:11px;color:#888">${locationText || "Localizacao nao informada"}</span><br/><br/>
+      <span class="map-popup-location">${locationText || "Localizacao nao informada"}</span><br/><br/>
       ${getStatusBadge(effectiveStatus)}<br/>
-      <span style="font-size:11px">${getFuelLabel(station.fuelType) || ""}</span><br/>
-      <span style="font-size:11px;color:#888">${timeAgo(station.timestamp)}</span>
-      ${station.notes ? `<br/><em style="font-size:11px;color:#aaa">${station.notes}</em>` : ""}
+      <span class="map-popup-meta">${getFuelLabel(station.fuelType) || ""}</span><br/>
+      <span class="map-popup-time">${timeAgo(station.timestamp)}</span>
+      ${station.notes ? `<br/><em class="map-popup-note">${station.notes}</em>` : ""}
+      ${
+        directionsUrl
+          ? `<div class="map-popup-actions"><a class="map-popup-link" href="${escapeHtml(directionsUrl)}" target="_blank" rel="noopener noreferrer">Navegar</a></div>`
+          : ""
+      }
     </div>
   `;
 }
@@ -2793,6 +2889,7 @@ function startAutoRefresh() {
 async function init() {
   loadConfirmations();
   loadGeocodeCache();
+  initThemeWatcher();
   initMap();
   syncFormEntryNamesFromConfig();
   syncNearChipLabel();
