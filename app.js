@@ -24,11 +24,11 @@ const CONFIG = {
 
   // URL JSON público da Google Sheet
   SHEETS_JSON_URL:
-    "https://docs.google.com/spreadsheets/d/12dAC-9JAXL5doiHNW7okev6FoUMqHv5c7ZvABBO2SqM/gviz/tq?tqx=out:json",
+    "https://docs.google.com/spreadsheets/d/1XOJyN0JXvYdPN-C7xGBaukyXeETWKeOtyo4IAwakToY/gviz/tq?tqx=out:json",
 
   // Entry IDs reais extraídos do seu link preenchido
   FORM_ENTRY_IDS: {
-    name: "entry.504966515", // Nome da Bomba
+    timestamp: "entry.504966515",
     province: "entry.667890039", // Província
     city: "entry.850024881", // Cidade
     neighborhood: "entry.454703331", // Bairro
@@ -36,6 +36,18 @@ const CONFIG = {
     queueSize: "entry.1904078373", // Fila (Ex: Limpa)
     fuelType: "entry.716807350", // Combustível (Ex: Gasolina)
     notes: "entry.560588685", // ID provável para Observações*
+    reportId: "entry.667890039",
+    placeId: "entry.850024881",
+    name: "entry.454703331",
+    address: "entry.1638569107",
+    city: "entry.1904078373",
+    neighborhood: "entry.716807350",
+    lat: "entry.560588685",
+    lng: "entry.1214864610",
+    fuelType: "entry.1402012265",
+    status: "entry.1115978662",
+    notes: "entry.804840006",
+    confirmation: "entry.2079672422",
   },
 
   // Intervalo de atualização automática (ms)
@@ -218,13 +230,18 @@ const $$ = (sel) => [...document.querySelectorAll(sel)];
 
 function syncFormEntryNamesFromConfig() {
   const fieldMap = [
+    { selector: "#f_timestamp", key: "timestamp" },
+    { selector: "#f_report_id", key: "reportId" },
+    { selector: "#f_place_id", key: "placeId" },
     { selector: "#f_name", key: "name" },
-    { selector: "#f_province", key: "province" },
+    { selector: "#f_address", key: "address" },
     { selector: "#f_city", key: "city" },
     { selector: "#f_neighborhood", key: "neighborhood" },
-    { selector: "#f_queue", key: "queueSize" },
+    { selector: "#f_lat", key: "lat" },
+    { selector: "#f_lng", key: "lng" },
     { selector: "#f_fuel", key: "fuelType" },
     { selector: "#f_notes", key: "notes" },
+    { selector: "#f_confirmation", key: "confirmation" },
   ];
 
   fieldMap.forEach(({ selector, key }) => {
@@ -232,6 +249,9 @@ function syncFormEntryNamesFromConfig() {
     const entryId = CONFIG.FORM_ENTRY_IDS[key];
     if (el && entryId) el.setAttribute("name", entryId);
   });
+
+  $("#f_province")?.closest(".form-group")?.setAttribute("hidden", "hidden");
+  $("#f_queue")?.closest(".form-group")?.setAttribute("hidden", "hidden");
 
   const statusEntryId = CONFIG.FORM_ENTRY_IDS.status;
   if (statusEntryId) {
@@ -305,6 +325,47 @@ function isValidDateObject(value) {
   return value instanceof Date && !Number.isNaN(value.getTime());
 }
 
+function formatReportTimestamp(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function slugify(value) {
+  return normalizeSheetLabel(value)
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function buildManualPlaceId(parts) {
+  const slug = parts.map(slugify).filter(Boolean).join("-");
+  return slug ? `manual-${slug}` : `manual-${Date.now()}`;
+}
+
+function fillHiddenReportFields(station = null) {
+  const now = new Date();
+  const placeId =
+    station?.placeId ||
+    buildManualPlaceId([
+      $("#f_name")?.value,
+      $("#f_city")?.value,
+      $("#f_neighborhood")?.value,
+    ]);
+
+  const values = {
+    "#f_timestamp": formatReportTimestamp(now),
+    "#f_report_id": `RPT-${now.getTime()}`,
+    "#f_place_id": placeId,
+    "#f_lat": station?.lat ?? $("#f_lat")?.value ?? "",
+    "#f_lng": station?.lng ?? $("#f_lng")?.value ?? "",
+    "#f_confirmation": "Sim",
+  };
+
+  Object.entries(values).forEach(([selector, value]) => {
+    const el = $(selector);
+    if (el) el.value = value ?? "";
+  });
+}
+
 function parseGvizDateLiteral(value) {
   const match = String(value || "")
     .trim()
@@ -318,8 +379,15 @@ function parseGvizDateLiteral(value) {
 
   if (!parts.length) return null;
 
-  const [year = 0, month = 0, day = 1, hour = 0, minute = 0, second = 0, ms = 0] =
-    parts;
+  const [
+    year = 0,
+    month = 0,
+    day = 1,
+    hour = 0,
+    minute = 0,
+    second = 0,
+    ms = 0,
+  ] = parts;
   const date = new Date(year, month, day, hour, minute, second, ms);
   return isValidDateObject(date) ? date : null;
 }
@@ -561,7 +629,8 @@ function normalizeFuelValue(value) {
   if (!normalized) return "both";
   if (["both", "ambos", "gasolina + diesel"].includes(normalized))
     return "both";
-  if (["gasoline", "gasolina"].includes(normalized)) return "gasoline";
+  if (["gasoline", "gasolina", "gas"].includes(normalized))
+    return "gasoline";
   if (["diesel"].includes(normalized)) return "diesel";
   return "both";
 }
@@ -584,6 +653,17 @@ function getFuelLabel(fuelType) {
 function getDistancePill(station) {
   if (typeof station.distance !== "number") return "";
   return `<span class="meta-pill distance">${renderIcon("location_on")} ${station.distance.toFixed(1)} km</span>`;
+}
+
+function getStationLocationText(station, { includeAddress = false } = {}) {
+  const parts = [];
+
+  if (includeAddress && station?.address) parts.push(station.address);
+  if (station?.neighborhood) parts.push(station.neighborhood);
+  if (station?.city) parts.push(station.city);
+  if (station?.province) parts.push(station.province);
+
+  return [...new Set(parts.filter(Boolean))].join(" · ");
 }
 
 function hasCoordinates(station) {
@@ -629,7 +709,7 @@ function sortStationsByFreshnessAndTime(stations) {
 
 function isMaputoStation(station) {
   const locationText =
-    `${station.province || ""} ${station.city || ""} ${station.neighborhood || ""}`.toLowerCase();
+    `${station.address || ""} ${station.province || ""} ${station.city || ""} ${station.neighborhood || ""}`.toLowerCase();
   return locationText.includes("maputo") || locationText.includes("matola");
 }
 
@@ -780,6 +860,8 @@ function initMap() {
 
 function getStationGeocodeKey(station) {
   const parts = [
+    station?.placeId,
+    station?.address,
     station?.name,
     station?.neighborhood,
     station?.city,
@@ -794,7 +876,15 @@ function getStationGeocodeKey(station) {
 function getStationGeocodeQueries(station) {
   const country = CONFIG.GEOCODE_COUNTRY;
   const options = [
-    [station.name, station.neighborhood, station.city, station.province, country]
+    [station.address, station.city, country].filter(Boolean).join(", "),
+    [
+      station.name,
+      station.address,
+      station.neighborhood,
+      station.city,
+      station.province,
+      country,
+    ]
       .filter(Boolean)
       .join(", "),
     [station.neighborhood, station.city, station.province, country]
@@ -957,10 +1047,13 @@ function createMarkerIcon(status) {
 
 function getPopupContent(station) {
   const effectiveStatus = getEffectiveStatus(station);
+  const locationText = getStationLocationText(station, {
+    includeAddress: true,
+  });
   return `
     <div style="min-width:180px">
       <strong style="font-size:14px;color:${effectiveStatus === "available" ? "#22c55e" : effectiveStatus === "queue" ? "#eab308" : effectiveStatus === "empty" ? "#ef4444" : "#aaa"}">${station.name}</strong><br/>
-      <span style="font-size:11px;color:#888">${station.neighborhood}, ${station.city}</span><br/><br/>
+      <span style="font-size:11px;color:#888">${locationText || "Localizacao nao informada"}</span><br/><br/>
       ${getStatusBadge(effectiveStatus)}<br/>
       <span style="font-size:11px">${getFuelLabel(station.fuelType) || ""}</span><br/>
       <span style="font-size:11px;color:#888">${timeAgo(station.timestamp)}</span>
@@ -1301,6 +1394,7 @@ function applyFilters() {
     result = result.filter(
       (s) =>
         s.name.toLowerCase().includes(q) ||
+        (s.address || "").toLowerCase().includes(q) ||
         s.city.toLowerCase().includes(q) ||
         s.neighborhood.toLowerCase().includes(q) ||
         s.province.toLowerCase().includes(q),
@@ -1320,7 +1414,8 @@ function applyFilters() {
       result = result.filter(
         (s) =>
           normalizeStatusValue(s.status) === "available" &&
-          normalizeQueueValue(s.queueSize || "none") === "none" &&
+          !!s.queueSize &&
+          normalizeQueueValue(s.queueSize) === "none" &&
           !isStale(s.timestamp),
       );
       break;
@@ -1483,8 +1578,10 @@ function buildSheetColumnIndex(columns) {
   const rules = [
     {
       key: "timestamp",
-      patterns: [/timestamp/, /carimbo/, /data.*hora/, /hora.*data/],
+      patterns: [/timestamp/, /timetamps?/, /carimbo/, /data.*hora/, /hora.*data/],
     },
+    { key: "reportId", patterns: [/report.*id/] },
+    { key: "placeId", patterns: [/place.*id/] },
     {
       key: "date",
       patterns: [/^data$/, /data.*alteracao/, /data.*atualizacao/],
@@ -1493,7 +1590,8 @@ function buildSheetColumnIndex(columns) {
       key: "time",
       patterns: [/^hora$/, /hora.*alteracao/, /hora.*atualizacao/],
     },
-    { key: "name", patterns: [/nome.*bomba/, /^nome$/] },
+    { key: "name", patterns: [/posto.*nome/, /nome.*posto/, /nome.*bomba/, /^nome$/] },
+    { key: "address", patterns: [/endereco/, /morada/, /localizacao/] },
     { key: "province", patterns: [/provincia/] },
     { key: "city", patterns: [/cidade/] },
     { key: "neighborhood", patterns: [/bairro/, /zona/] },
@@ -1501,10 +1599,10 @@ function buildSheetColumnIndex(columns) {
     { key: "queueSize", patterns: [/fila/, /queue/] },
     {
       key: "confirmations",
-      patterns: [/confirma/, /contador.*confirm/, /confirmacoes/, /votos/],
+      patterns: [/confirma/, /contador.*confirm/, /confirmacoes?/, /votos/],
     },
     { key: "fuelType", patterns: [/combustivel/, /fuel/] },
-    { key: "notes", patterns: [/observa/, /nota/, /coment/] },
+    { key: "notes", patterns: [/observa/, /observacao/, /nota/, /coment/] },
     { key: "lat", patterns: [/^lat$/, /latitude/] },
     { key: "lng", patterns: [/^lng$/, /longitude/, /long/] },
   ];
@@ -1541,6 +1639,10 @@ function parseConfirmations(value, fallback = 0) {
   if (!text) return fallback;
 
   // Aceita "12", "12 confirmações", "12.0", "12,0"
+  if (["sim", "yes", "true", "confirmado"].includes(normalizeSheetLabel(text))) {
+    return 1;
+  }
+
   const match = text.match(/-?\d+(?:[.,]\d+)?/);
   if (!match) return fallback;
 
@@ -1553,7 +1655,8 @@ function parseConfirmations(value, fallback = 0) {
 /** Converte linha da Google Sheets para objeto station */
 function sheetsRowToStation(row, index, colIndex = {}) {
   const cols = row.c || [];
-  const getCellByIndex = (i) => (typeof i === "number" ? cols[i] || null : null);
+  const getCellByIndex = (i) =>
+    typeof i === "number" ? cols[i] || null : null;
   const cellToText = (cell) => {
     if (!cell) return "";
     if (cell.f != null && String(cell.f).trim()) return String(cell.f).trim();
@@ -1573,31 +1676,38 @@ function sheetsRowToStation(row, index, colIndex = {}) {
     fallbackValue: getRawByIndex(0),
   });
 
-  const name = getTextByKey("name") || getTextByIndex(1) || "Bomba sem nome";
-  const province = getTextByKey("province") || getTextByIndex(2) || "";
-  const city = getTextByKey("city") || getTextByIndex(3) || "";
-  const neighborhood = getTextByKey("neighborhood") || getTextByIndex(4) || "";
+  const reportId = getTextByKey("reportId") || getTextByIndex(1) || "";
+  const placeId = getTextByKey("placeId") || getTextByIndex(2) || "";
+  const name = getTextByKey("name") || getTextByIndex(3) || "Bomba sem nome";
+  const address = getTextByKey("address") || getTextByIndex(4) || "";
+  const province = getTextByKey("province") || address || "";
+  const city = getTextByKey("city") || getTextByIndex(5) || "";
+  const neighborhood = getTextByKey("neighborhood") || getTextByIndex(6) || "";
   const status = normalizeStatusValue(
-    getTextByKey("status") || getTextByIndex(5) || "",
+    getTextByKey("status") || getTextByIndex(10) || "",
   );
-  const queueSize = normalizeQueueValue(
-    getTextByKey("queueSize") || getTextByIndex(6) || "none",
-  );
+  const queueText = getTextByKey("queueSize") || "";
+  const queueSize = queueText ? normalizeQueueValue(queueText) : "";
   const confirmations = parseConfirmations(
-    getRawByKey("confirmations") ?? getTextByKey("confirmations"),
+    getRawByKey("confirmations") ??
+      getTextByKey("confirmations") ??
+      getTextByIndex(12),
     0,
   );
   const fuelType = normalizeFuelValue(
-    getTextByKey("fuelType") || getTextByIndex(7) || "both",
+    getTextByKey("fuelType") || getTextByIndex(9) || "both",
   );
-  const notes = getTextByKey("notes") || getTextByIndex(8) || "";
-  const lat = parseCoordinate(getRawByKey("lat"));
-  const lng = parseCoordinate(getRawByKey("lng"));
+  const notes = getTextByKey("notes") || getTextByIndex(11) || "";
+  const lat = parseCoordinate(getRawByKey("lat") ?? getRawByIndex(7));
+  const lng = parseCoordinate(getRawByKey("lng") ?? getRawByIndex(8));
 
   return {
-    id: `sheet_${index}`,
+    id: placeId || reportId || `sheet_${index}`,
+    reportId,
+    placeId,
     timestamp,
     name,
+    address,
     province,
     city,
     neighborhood,
@@ -1699,6 +1809,7 @@ function openModal({ keepHint = false } = {}) {
   if (!keepHint) $("#reportStationHint").classList.add("hidden");
   $("#reportModal").classList.remove("hidden");
   document.body.style.overflow = "hidden";
+  if (!keepHint) fillHiddenReportFields();
   setTimeout(() => $("#f_name").focus(), 100);
 }
 
@@ -1712,16 +1823,24 @@ function openReportForStation(station) {
     : `Atualizar estado de ${station.name}. Os dados atuais já foram preenchidos.`;
 
   $("#f_name").value = station.name || "";
-  $("#f_province").value = station.province || "";
+  $("#f_address").value = station.address || "";
   $("#f_city").value = station.city || "";
   $("#f_neighborhood").value = station.neighborhood || "";
-  $("#f_queue").value = normalizeQueueValue(station.queueSize || "none");
   $("#f_fuel").value = normalizeFuelValue(station.fuelType || "both");
   $("#f_notes").value = station.notes || "";
+  fillHiddenReportFields(station);
 
   const statusValue = normalizeStatusValue(station.status);
   $$("#reportForm input[type='radio']").forEach((radio) => {
-    radio.checked = radio.value === statusValue;
+    radio.checked =
+      radio.value ===
+      (statusValue === "available"
+        ? "Disponivel"
+        : statusValue === "queue"
+          ? "Com fila"
+          : statusValue === "empty"
+            ? "Sem combustivel"
+            : "");
   });
 
   openModal({ keepHint: true });
@@ -1861,6 +1980,7 @@ function initEventListeners() {
     submitBtn.textContent = "A enviar…";
     submitBtn.disabled = true;
 
+    fillHiddenReportFields();
     const formData = new FormData(form);
     const result = await submitReport(formData);
 
@@ -1877,19 +1997,32 @@ function initEventListeners() {
       // Se mock, adiciona à lista temporariamente
       if (result.mock) {
         const tempStation = {
-          id: "temp_" + Date.now(),
+          id:
+            formData.get(CONFIG.FORM_ENTRY_IDS.placeId) || "temp_" + Date.now(),
+          reportId: formData.get(CONFIG.FORM_ENTRY_IDS.reportId) || "",
+          placeId: formData.get(CONFIG.FORM_ENTRY_IDS.placeId) || "",
           name: formData.get(CONFIG.FORM_ENTRY_IDS.name) || "Nova bomba",
-          province: formData.get(CONFIG.FORM_ENTRY_IDS.province) || "",
+          address: formData.get(CONFIG.FORM_ENTRY_IDS.address) || "",
+          province: formData.get(CONFIG.FORM_ENTRY_IDS.address) || "",
           city: formData.get(CONFIG.FORM_ENTRY_IDS.city) || "",
           neighborhood: formData.get(CONFIG.FORM_ENTRY_IDS.neighborhood) || "",
-          status: formData.get(CONFIG.FORM_ENTRY_IDS.status) || "available",
-          queueSize: formData.get(CONFIG.FORM_ENTRY_IDS.queueSize) || "none",
-          fuelType: formData.get(CONFIG.FORM_ENTRY_IDS.fuelType) || "both",
+          status:
+            normalizeStatusValue(formData.get(CONFIG.FORM_ENTRY_IDS.status)) ||
+            "available",
+          queueSize: "",
+          fuelType:
+            normalizeFuelValue(formData.get(CONFIG.FORM_ENTRY_IDS.fuelType)) ||
+            "both",
           notes: formData.get(CONFIG.FORM_ENTRY_IDS.notes) || "",
-          confirmations: 0,
-          timestamp: new Date().toISOString(),
-          lat: null,
-          lng: null,
+          confirmations: parseConfirmations(
+            formData.get(CONFIG.FORM_ENTRY_IDS.confirmation),
+            0,
+          ),
+          timestamp:
+            formData.get(CONFIG.FORM_ENTRY_IDS.timestamp) ||
+            new Date().toISOString(),
+          lat: parseCoordinate(formData.get(CONFIG.FORM_ENTRY_IDS.lat)),
+          lng: parseCoordinate(formData.get(CONFIG.FORM_ENTRY_IDS.lng)),
         };
         APP.stations.unshift(tempStation);
         await hydrateStationCoordinates([tempStation]);

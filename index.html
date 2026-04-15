@@ -166,20 +166,41 @@
         <div id="reportStationHint" class="report-station-hint hidden"></div>
 
         <form id="reportForm" novalidate>
+          <input id="f_timestamp" name="entry.504966515" type="hidden" />
+          <input id="f_report_id" name="entry.667890039" type="hidden" />
+          <input id="f_place_id" name="entry.850024881" type="hidden" />
+          <input id="f_lat" name="entry.560588685" type="hidden" />
+          <input id="f_lng" name="entry.1214864610" type="hidden" />
+          <input
+            id="f_confirmation"
+            name="entry.2079672422"
+            type="hidden"
+            value="Sim"
+          />
           <div class="form-group">
-            <label for="f_name">Nome da bomba *</label>
+            <label for="f_name">Nome do posto *</label>
             <input
               id="f_name"
-              name="entry.1111111111"
+              name="entry.454703331"
               type="text"
               placeholder="ex: Petromoc Sommerschield"
+              required
+            />
+          </div>
+          <div class="form-group">
+            <label for="f_address">Endereco / localizacao *</label>
+            <input
+              id="f_address"
+              name="entry.1638569107"
+              type="text"
+              placeholder="ex: Av. 24 de Julho, perto do Shoprite"
               required
             />
           </div>
           <div class="form-row">
             <div class="form-group">
               <label for="f_province">Província *</label>
-              <select id="f_province" name="entry.2222222222" required>
+              <select id="f_province" name="unused_province" hidden>
                 <option value="">Selecionar...</option>
                 <option>Maputo Cidade</option>
                 <option>Maputo Província</option>
@@ -198,7 +219,7 @@
               <label for="f_city">Cidade *</label>
               <input
                 id="f_city"
-                name="entry.3333333333"
+                name="entry.1904078373"
                 type="text"
                 placeholder="ex: Maputo"
                 required
@@ -209,7 +230,7 @@
             <label for="f_neighborhood">Bairro *</label>
             <input
               id="f_neighborhood"
-              name="entry.4444444444"
+              name="entry.716807350"
               type="text"
               placeholder="ex: Sommerschield"
               required
@@ -221,8 +242,8 @@
               <label class="radio-opt green-opt">
                 <input
                   type="radio"
-                  name="entry.5555555555"
-                  value="available"
+                  name="entry.1115978662"
+                  value="Disponivel"
                   required
                 />
                 <span class="radio-label">
@@ -233,7 +254,11 @@
                 </span>
               </label>
               <label class="radio-opt yellow-opt">
-                <input type="radio" name="entry.5555555555" value="queue" />
+                <input
+                  type="radio"
+                  name="entry.1115978662"
+                  value="Com fila"
+                />
                 <span class="radio-label">
                   <span class="material-symbols-outlined icon-inline"
                     >schedule</span
@@ -242,7 +267,11 @@
                 </span>
               </label>
               <label class="radio-opt red-opt">
-                <input type="radio" name="entry.5555555555" value="empty" />
+                <input
+                  type="radio"
+                  name="entry.1115978662"
+                  value="Sem combustivel"
+                />
                 <span class="radio-label">
                   <span class="material-symbols-outlined icon-inline"
                     >block</span
@@ -254,8 +283,8 @@
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label for="f_queue">Tamanho da fila</label>
-              <select id="f_queue" name="entry.6666666666">
+              <label for="f_queue" hidden>Tamanho da fila</label>
+              <select id="f_queue" name="unused_queue" hidden>
                 <option value="none">Sem fila</option>
                 <option value="short">Curta (&lt;10 carros)</option>
                 <option value="medium">Média (10-30)</option>
@@ -264,7 +293,7 @@
             </div>
             <div class="form-group">
               <label for="f_fuel">Combustível</label>
-              <select id="f_fuel" name="entry.7777777777">
+              <select id="f_fuel" name="entry.1402012265" required>
                 <option value="both">Ambos</option>
                 <option value="gasoline">Gasolina</option>
                 <option value="diesel">Diesel</option>
@@ -275,7 +304,7 @@
             <label for="f_notes">Observações</label>
             <textarea
               id="f_notes"
-              name="entry.8888888888"
+              name="entry.804840006"
               rows="2"
               placeholder="Informação adicional útil..."
             ></textarea>
