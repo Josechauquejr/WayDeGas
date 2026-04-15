@@ -850,6 +850,18 @@ body {
   gap: 12px;
 }
 
+.lookup-shell {
+  position: relative;
+}
+
+.form-help {
+  display: block;
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
 input[type="text"],
 input[type="email"],
 select,
@@ -895,6 +907,75 @@ textarea.error {
 textarea {
   resize: vertical;
   min-height: 70px;
+}
+
+.lookup-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border2);
+  background: rgba(11, 11, 11, 0.98);
+  box-shadow: var(--shadow);
+}
+
+.lookup-option {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--surface2);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 0.2s,
+    transform 0.2s,
+    background 0.2s;
+}
+
+.lookup-option:hover,
+.lookup-option.active {
+  border-color: rgba(245, 166, 35, 0.4);
+  background: rgba(245, 166, 35, 0.08);
+  transform: translateY(-1px);
+}
+
+.lookup-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.lookup-title {
+  font-family: var(--font-display);
+  font-size: 14px;
+  color: var(--text);
+}
+
+.lookup-subtitle {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.lookup-tag {
+  flex-shrink: 0;
+  align-self: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--amber);
+  border: 1px solid rgba(245, 166, 35, 0.28);
+  border-radius: 999px;
+  padding: 4px 8px;
 }
 
 .radio-group {

@@ -66,6 +66,9 @@ const CONFIG = {
   GEOCODE_COUNTRY: "Mozambique",
   GEOCODE_MAX_PER_CYCLE: 12,
   GEOCODE_CACHE_KEY: "cmz_geocode_cache",
+  PLACES_COUNTRY: "mz",
+  LOOKUP_MIN_QUERY: 2,
+  LOOKUP_MAX_RESULTS: 8,
 
   // Usar dados mock enquanto não configurado
   USE_MOCK: false,
@@ -219,14 +222,42 @@ const APP = {
   confirmations: {}, // { stationId: count } — persistido em localStorage
   geocodeCache: {},
   geocoder: null,
+  placesAutocompleteService: null,
+  placesService: null,
+  placeSessionToken: null,
+  reportLookupItems: [],
+  reportLookupIndex: -1,
+  reportLookupRequestId: 0,
+  reportLookupTimer: null,
+  suppressReportFieldSync: false,
 };
-const STATIONS_CACHE_VERSION = 3;
+const STATIONS_CACHE_VERSION = 4;
 
 /* ─────────────────────────────────────────────
    UTILITÁRIOS
 ───────────────────────────────────────────── */
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(
+    /[&<>"']/g,
+    (char) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[char] || char,
+  );
+}
+
+function hasMeaningfulValue(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim() !== "";
+  return true;
+}
 
 function syncFormEntryNamesFromConfig() {
   const fieldMap = [
@@ -338,18 +369,22 @@ function slugify(value) {
 
 function buildManualPlaceId(parts) {
   const slug = parts.map(slugify).filter(Boolean).join("-");
-  return slug ? `manual-${slug}` : `manual-${Date.now()}`;
+  return slug ? `manual-${slug}` : "";
 }
 
 function fillHiddenReportFields(station = null) {
   const now = new Date();
+  const currentPlaceId = String($("#f_place_id")?.value || "").trim();
+  const manualPlaceId = buildManualPlaceId([
+    $("#f_name")?.value,
+    $("#f_city")?.value,
+    $("#f_neighborhood")?.value,
+  ]);
   const placeId =
     station?.placeId ||
-    buildManualPlaceId([
-      $("#f_name")?.value,
-      $("#f_city")?.value,
-      $("#f_neighborhood")?.value,
-    ]);
+    (currentPlaceId && !currentPlaceId.startsWith("manual-")
+      ? currentPlaceId
+      : manualPlaceId || currentPlaceId || `manual-${now.getTime()}`);
 
   const values = {
     "#f_timestamp": formatReportTimestamp(now),
@@ -1296,7 +1331,7 @@ function renderList(stations) {
       </div>
 
       <div class="card-location">
-        ${renderIcon("location_on")} ${s.neighborhood} · ${s.city} · ${s.province}
+        ${renderIcon("location_on")} ${getStationLocationText(s) || "Localização não informada"}
       </div>
 
       <div class="card-meta">
@@ -1578,10 +1613,17 @@ function buildSheetColumnIndex(columns) {
   const rules = [
     {
       key: "timestamp",
-      patterns: [/timestamp/, /timetamps?/, /carimbo/, /data.*hora/, /hora.*data/],
+      patterns: [
+        /timestamp/,
+        /timestamps?/,
+        /timetamps?/,
+        /carimbo/,
+        /data.*hora/,
+        /hora.*data/,
+      ],
     },
-    { key: "reportId", patterns: [/report.*id/] },
-    { key: "placeId", patterns: [/place.*id/] },
+    { key: "reportId", patterns: [/report.*id/, /report_id/] },
+    { key: "placeId", patterns: [/place.*id/, /place_id/] },
     {
       key: "date",
       patterns: [/^data$/, /data.*alteracao/, /data.*atualizacao/],
@@ -1590,16 +1632,31 @@ function buildSheetColumnIndex(columns) {
       key: "time",
       patterns: [/^hora$/, /hora.*alteracao/, /hora.*atualizacao/],
     },
-    { key: "name", patterns: [/posto.*nome/, /nome.*posto/, /nome.*bomba/, /^nome$/] },
+    {
+      key: "name",
+      patterns: [
+        /posto.*nome/,
+        /posto_nome/,
+        /nome.*posto/,
+        /nome.*bomba/,
+        /^nome$/,
+      ],
+    },
     { key: "address", patterns: [/endereco/, /morada/, /localizacao/] },
     { key: "province", patterns: [/provincia/] },
     { key: "city", patterns: [/cidade/] },
     { key: "neighborhood", patterns: [/bairro/, /zona/] },
-    { key: "status", patterns: [/estado/, /status/, /situacao/] },
-    { key: "queueSize", patterns: [/fila/, /queue/] },
+    { key: "status", patterns: [/estado/, /status/, /situacao/, /disponibil/] },
+    { key: "queueSize", patterns: [/fila/, /queue/, /espera/] },
     {
       key: "confirmations",
-      patterns: [/confirma/, /contador.*confirm/, /confirmacoes?/, /votos/],
+      patterns: [
+        /confirma/,
+        /contador.*confirm/,
+        /confirmacoes?/,
+        /confirmacao/,
+        /votos/,
+      ],
     },
     { key: "fuelType", patterns: [/combustivel/, /fuel/] },
     { key: "notes", patterns: [/observa/, /observacao/, /nota/, /coment/] },
@@ -1665,6 +1722,20 @@ function sheetsRowToStation(row, index, colIndex = {}) {
   };
   const getRawByIndex = (i) => getCellByIndex(i)?.v ?? null;
   const getTextByIndex = (i) => cellToText(getCellByIndex(i));
+  const getRawByCandidates = (candidates = []) => {
+    for (const candidate of candidates) {
+      const value = getRawByIndex(candidate);
+      if (hasMeaningfulValue(value)) return value;
+    }
+    return null;
+  };
+  const getTextByCandidates = (candidates = []) => {
+    for (const candidate of candidates) {
+      const value = getTextByIndex(candidate);
+      if (hasMeaningfulValue(value)) return value;
+    }
+    return "";
+  };
   const getRawByKey = (key) => getRawByIndex(colIndex[key]);
   const getTextByKey = (key) => getTextByIndex(colIndex[key]);
 
@@ -1673,33 +1744,35 @@ function sheetsRowToStation(row, index, colIndex = {}) {
     timestampValue: getRawByKey("timestamp"),
     dateValue: getRawByKey("date"),
     timeValue: getRawByKey("time"),
-    fallbackValue: getRawByIndex(0),
+    fallbackValue: getRawByCandidates([0, 1]),
   });
 
-  const reportId = getTextByKey("reportId") || getTextByIndex(1) || "";
-  const placeId = getTextByKey("placeId") || getTextByIndex(2) || "";
-  const name = getTextByKey("name") || getTextByIndex(3) || "Bomba sem nome";
-  const address = getTextByKey("address") || getTextByIndex(4) || "";
-  const province = getTextByKey("province") || address || "";
-  const city = getTextByKey("city") || getTextByIndex(5) || "";
-  const neighborhood = getTextByKey("neighborhood") || getTextByIndex(6) || "";
+  const reportId = getTextByKey("reportId") || getTextByCandidates([2, 1]) || "";
+  const placeId = getTextByKey("placeId") || getTextByCandidates([3, 2]) || "";
+  const name =
+    getTextByKey("name") || getTextByCandidates([4, 3]) || "Bomba sem nome";
+  const address = getTextByKey("address") || getTextByCandidates([5, 4]) || "";
+  const province = getTextByKey("province") || "";
+  const city = getTextByKey("city") || getTextByCandidates([6, 5]) || "";
+  const neighborhood =
+    getTextByKey("neighborhood") || getTextByCandidates([7, 6]) || "";
   const status = normalizeStatusValue(
-    getTextByKey("status") || getTextByIndex(10) || "",
+    getTextByKey("status") || getTextByCandidates([11, 10]) || "",
   );
-  const queueText = getTextByKey("queueSize") || "";
+  const queueText = getTextByKey("queueSize") || getTextByCandidates([12]);
   const queueSize = queueText ? normalizeQueueValue(queueText) : "";
   const confirmations = parseConfirmations(
     getRawByKey("confirmations") ??
       getTextByKey("confirmations") ??
-      getTextByIndex(12),
+      getTextByCandidates([13, 12]),
     0,
   );
   const fuelType = normalizeFuelValue(
-    getTextByKey("fuelType") || getTextByIndex(9) || "both",
+    getTextByKey("fuelType") || getTextByCandidates([10, 9]) || "both",
   );
-  const notes = getTextByKey("notes") || getTextByIndex(11) || "";
-  const lat = parseCoordinate(getRawByKey("lat") ?? getRawByIndex(7));
-  const lng = parseCoordinate(getRawByKey("lng") ?? getRawByIndex(8));
+  const notes = getTextByKey("notes") || getTextByCandidates([12, 11]) || "";
+  const lat = parseCoordinate(getRawByKey("lat") ?? getRawByCandidates([8, 7]));
+  const lng = parseCoordinate(getRawByKey("lng") ?? getRawByCandidates([9, 8]));
 
   return {
     id: placeId || reportId || `sheet_${index}`,
@@ -1721,6 +1794,107 @@ function sheetsRowToStation(row, index, colIndex = {}) {
   };
 }
 
+function getStationGroupKey(station, index = 0) {
+  const placeId = normalizeSheetLabel(station?.placeId);
+  if (placeId) return `place:${placeId}`;
+
+  const manualKey = [
+    station?.name,
+    station?.address,
+    station?.city,
+    station?.neighborhood,
+  ]
+    .map((part) => normalizeSheetLabel(part))
+    .filter(Boolean)
+    .join("|");
+  if (manualKey) return `manual:${manualKey}`;
+
+  const reportId = normalizeSheetLabel(station?.reportId);
+  if (reportId) return `report:${reportId}`;
+
+  return `row:${index}`;
+}
+
+function getStationTimestampMs(station) {
+  const parsed = parseDateValue(station?.timestamp);
+  return parsed ? parsed.getTime() : 0;
+}
+
+function pickFirstReportValue(reports, selector, fallback = "") {
+  for (const report of reports) {
+    const value = selector(report);
+    if (hasMeaningfulValue(value)) return value;
+  }
+  return fallback;
+}
+
+function consolidateStationReports(stations) {
+  const groups = new Map();
+
+  (stations || []).forEach((station, index) => {
+    const key = getStationGroupKey(station, index);
+    const bucket = groups.get(key) || [];
+    bucket.push(station);
+    groups.set(key, bucket);
+  });
+
+  return [...groups.values()]
+    .map((reports) => {
+      const sorted = [...reports].sort(
+        (a, b) => getStationTimestampMs(b) - getStationTimestampMs(a),
+      );
+      const freshest = sorted[0];
+      const freshestWithStatus =
+        sorted.find(
+          (report) =>
+            !isStale(report.timestamp) && normalizeStatusValue(report.status),
+        ) ||
+        sorted.find((report) => normalizeStatusValue(report.status)) ||
+        freshest;
+      const placeId = pickFirstReportValue(sorted, (report) => report.placeId, "");
+      const reportId = pickFirstReportValue(
+        sorted,
+        (report) => report.reportId,
+        freshest?.reportId || "",
+      );
+
+      return {
+        id: placeId || reportId || freshest?.id || `sheet_${Date.now()}`,
+        reportId,
+        placeId,
+        timestamp: freshestWithStatus?.timestamp || freshest?.timestamp || "",
+        lastReportTimestamp: freshest?.timestamp || "",
+        name: pickFirstReportValue(
+          sorted,
+          (report) => report.name,
+          "Bomba sem nome",
+        ),
+        address: pickFirstReportValue(sorted, (report) => report.address, ""),
+        province: pickFirstReportValue(sorted, (report) => report.province, ""),
+        city: pickFirstReportValue(sorted, (report) => report.city, ""),
+        neighborhood: pickFirstReportValue(
+          sorted,
+          (report) => report.neighborhood,
+          "",
+        ),
+        status: normalizeStatusValue(freshestWithStatus?.status) || "",
+        queueSize: pickFirstReportValue(sorted, (report) => report.queueSize, ""),
+        confirmations: sorted.reduce(
+          (sum, report) => sum + parseConfirmations(report.confirmations, 0),
+          0,
+        ),
+        fuelType: normalizeFuelValue(
+          pickFirstReportValue(sorted, (report) => report.fuelType, "both"),
+        ),
+        notes: pickFirstReportValue(sorted, (report) => report.notes, ""),
+        lat: pickFirstReportValue(sorted, (report) => report.lat, null),
+        lng: pickFirstReportValue(sorted, (report) => report.lng, null),
+        reports: sorted.length,
+      };
+    })
+    .sort((a, b) => getStationTimestampMs(b) - getStationTimestampMs(a));
+}
+
 /** Carrega dados do Google Sheets */
 async function loadFromSheets() {
   try {
@@ -1736,7 +1910,9 @@ async function loadFromSheets() {
     const rows = table.rows || [];
     const colIndex = buildSheetColumnIndex(table.cols || []);
 
-    return rows.map((row, i) => sheetsRowToStation(row, i, colIndex));
+    return consolidateStationReports(
+      rows.map((row, i) => sheetsRowToStation(row, i, colIndex)),
+    );
   } catch (err) {
     console.warn(
       "[CombustívelMZ] Falha ao carregar Google Sheets:",
@@ -1805,12 +1981,411 @@ async function submitReport(formData) {
 /* ─────────────────────────────────────────────
    MODAL DO FORMULÁRIO
 ───────────────────────────────────────────── */
+function withSuppressedReportFieldSync(callback) {
+  APP.suppressReportFieldSync = true;
+  try {
+    callback();
+  } finally {
+    APP.suppressReportFieldSync = false;
+  }
+}
+
+function setReportStatusRadios(statusValue = "") {
+  const radioValue =
+    statusValue === "available"
+      ? "Disponivel"
+      : statusValue === "queue"
+        ? "Com fila"
+        : statusValue === "empty"
+          ? "Sem combustivel"
+          : "";
+
+  $$("#reportForm input[type='radio']").forEach((radio) => {
+    radio.checked = radio.value === radioValue;
+    radio.closest(".radio-opt")?.classList.remove("error-radio");
+  });
+}
+
+function clearResolvedReportLocation() {
+  ["#f_place_id", "#f_lat", "#f_lng"].forEach((selector) => {
+    const field = $(selector);
+    if (field) field.value = "";
+  });
+}
+
+function buildReportLookupValue(station) {
+  return station?.name || station?.address || "";
+}
+
+function applyStationToReportForm(
+  station,
+  { fillStatus = true, fillFuel = true, fillNotes = true, syncLookup = true } = {},
+) {
+  if (!station) return;
+
+  withSuppressedReportFieldSync(() => {
+    if (syncLookup) {
+      const lookup = $("#f_station_lookup");
+      if (lookup) lookup.value = buildReportLookupValue(station);
+    }
+
+    if (hasMeaningfulValue(station.name)) $("#f_name").value = station.name;
+    if (hasMeaningfulValue(station.address)) $("#f_address").value = station.address;
+    if (hasMeaningfulValue(station.city)) $("#f_city").value = station.city;
+    if (hasMeaningfulValue(station.neighborhood)) {
+      $("#f_neighborhood").value = station.neighborhood;
+    }
+    if (fillFuel && hasMeaningfulValue(station.fuelType)) {
+      $("#f_fuel").value = normalizeFuelValue(station.fuelType);
+    }
+    if (fillNotes && hasMeaningfulValue(station.notes)) {
+      $("#f_notes").value = station.notes;
+    }
+    if (fillStatus) {
+      setReportStatusRadios(normalizeStatusValue(station.status));
+    }
+
+    const placeIdField = $("#f_place_id");
+    const latField = $("#f_lat");
+    const lngField = $("#f_lng");
+    if (placeIdField) placeIdField.value = station.placeId || "";
+    if (latField) latField.value = hasMeaningfulValue(station.lat) ? station.lat : "";
+    if (lngField) lngField.value = hasMeaningfulValue(station.lng) ? station.lng : "";
+
+    fillHiddenReportFields(station);
+  });
+}
+
+function hideReportLookupDropdown() {
+  const dropdown = $("#stationLookupDropdown");
+  const input = $("#f_station_lookup");
+  clearTimeout(APP.reportLookupTimer);
+  if (dropdown) {
+    dropdown.classList.add("hidden");
+    dropdown.innerHTML = "";
+  }
+  if (input) input.setAttribute("aria-expanded", "false");
+  APP.reportLookupItems = [];
+  APP.reportLookupIndex = -1;
+}
+
+function setReportLookupActiveIndex(index) {
+  const options = $$("#stationLookupDropdown .lookup-option");
+  if (!options.length) {
+    APP.reportLookupIndex = -1;
+    return;
+  }
+
+  APP.reportLookupIndex = Math.max(0, Math.min(index, options.length - 1));
+  options.forEach((option, optionIndex) => {
+    option.classList.toggle("active", optionIndex === APP.reportLookupIndex);
+  });
+}
+
+function renderReportLookupItems(items) {
+  const dropdown = $("#stationLookupDropdown");
+  const input = $("#f_station_lookup");
+  if (!dropdown || !input) return;
+
+  APP.reportLookupItems = items;
+  if (!items.length) {
+    hideReportLookupDropdown();
+    return;
+  }
+
+  dropdown.innerHTML = items
+    .map(
+      (item, index) => `
+        <button
+          type="button"
+          class="lookup-option"
+          data-index="${index}"
+          role="option"
+        >
+          <span class="lookup-copy">
+            <span class="lookup-title">${escapeHtml(item.title)}</span>
+            <span class="lookup-subtitle">${escapeHtml(item.subtitle)}</span>
+          </span>
+          <span class="lookup-tag">${escapeHtml(item.meta)}</span>
+        </button>`,
+    )
+    .join("");
+
+  dropdown.classList.remove("hidden");
+  input.setAttribute("aria-expanded", "true");
+  setReportLookupActiveIndex(0);
+
+  $$("#stationLookupDropdown .lookup-option").forEach((button) => {
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      void selectReportLookupItem(Number(button.dataset.index));
+    });
+  });
+}
+
+function getLookupScore(station, query) {
+  const haystacks = [
+    station?.name,
+    station?.address,
+    station?.city,
+    station?.neighborhood,
+  ].map((value) => normalizeSheetLabel(value));
+
+  let score = 0;
+  haystacks.forEach((value, index) => {
+    if (!value) return;
+    if (value.startsWith(query)) score += index === 0 ? 60 : 35;
+    else if (value.includes(query)) score += index === 0 ? 20 : 10;
+  });
+
+  return score;
+}
+
+function getLocalLookupItems(query) {
+  const normalizedQuery = normalizeSheetLabel(query);
+  if (normalizedQuery.length < CONFIG.LOOKUP_MIN_QUERY) return [];
+
+  return [...APP.stations]
+    .map((station) => ({
+      station,
+      score: getLookupScore(station, normalizedQuery),
+    }))
+    .filter(({ score }) => score > 0)
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        getStationTimestampMs(b.station) - getStationTimestampMs(a.station),
+    )
+    .slice(0, CONFIG.LOOKUP_MAX_RESULTS)
+    .map(({ station }) => ({
+      key: `local:${station.id}`,
+      source: "local",
+      station,
+      title: station.name || station.address || "Bomba sem nome",
+      subtitle:
+        getStationLocationText(station, { includeAddress: true }) ||
+        "Bomba já reportada",
+      meta: STATUS_OPTIONS[getEffectiveStatus(station)]?.label || "Sem classificação",
+    }));
+}
+
+function canUsePlacesLookup() {
+  return !!window.google?.maps?.places && APP.mapProvider === "google";
+}
+
+function ensurePlacesLookupServices() {
+  if (!canUsePlacesLookup()) return false;
+
+  if (!APP.placesAutocompleteService) {
+    APP.placesAutocompleteService = new google.maps.places.AutocompleteService();
+  }
+
+  if (!APP.placesService) {
+    APP.placesService = new google.maps.places.PlacesService(
+      APP.map || document.createElement("div"),
+    );
+  }
+
+  if (
+    !APP.placeSessionToken &&
+    window.google?.maps?.places?.AutocompleteSessionToken
+  ) {
+    APP.placeSessionToken = new google.maps.places.AutocompleteSessionToken();
+  }
+
+  return true;
+}
+
+function fetchGoogleLookupItems(query) {
+  return new Promise((resolve) => {
+    if (
+      !ensurePlacesLookupServices() ||
+      normalizeSheetLabel(query).length < CONFIG.LOOKUP_MIN_QUERY
+    ) {
+      resolve([]);
+      return;
+    }
+
+    const request = {
+      input: query,
+      componentRestrictions: { country: CONFIG.PLACES_COUNTRY },
+    };
+    if (APP.placeSessionToken) request.sessionToken = APP.placeSessionToken;
+
+    APP.placesAutocompleteService.getPlacePredictions(
+      request,
+      (predictions, status) => {
+        const ok =
+          status === "OK" ||
+          status === window.google?.maps?.places?.PlacesServiceStatus?.OK;
+        if (!ok || !Array.isArray(predictions)) {
+          resolve([]);
+          return;
+        }
+
+        resolve(
+          predictions.slice(0, CONFIG.LOOKUP_MAX_RESULTS).map((prediction) => ({
+            key: `google:${prediction.place_id}`,
+            source: "google",
+            placeId: prediction.place_id,
+            title:
+              prediction.structured_formatting?.main_text ||
+              prediction.description,
+            subtitle:
+              prediction.structured_formatting?.secondary_text ||
+              prediction.description,
+            meta: "Google Maps",
+          })),
+        );
+      },
+    );
+  });
+}
+
+function getPlaceComponent(place, types) {
+  return (
+    place?.address_components?.find((component) =>
+      types.some((type) => component.types?.includes(type)),
+    )?.long_name || ""
+  );
+}
+
+function buildStationFromGooglePlace(place) {
+  const location = place?.geometry?.location;
+
+  return {
+    id: place?.place_id || `google-${Date.now()}`,
+    placeId: place?.place_id || "",
+    name:
+      place?.name ||
+      place?.formatted_address?.split(",")[0] ||
+      "Bomba sem nome",
+    address: place?.formatted_address || "",
+    province: getPlaceComponent(place, ["administrative_area_level_1"]),
+    city:
+      getPlaceComponent(place, [
+        "locality",
+        "administrative_area_level_2",
+        "administrative_area_level_1",
+      ]) || "",
+    neighborhood:
+      getPlaceComponent(place, [
+        "neighborhood",
+        "sublocality",
+        "sublocality_level_1",
+      ]) || "",
+    lat: typeof location?.lat === "function" ? location.lat() : null,
+    lng: typeof location?.lng === "function" ? location.lng() : null,
+    status: "",
+    fuelType: "",
+    notes: "",
+  };
+}
+
+function fetchGooglePlaceDetails(placeId) {
+  return new Promise((resolve) => {
+    if (!ensurePlacesLookupServices() || !placeId) {
+      resolve(null);
+      return;
+    }
+
+    APP.placesService.getDetails(
+      {
+        placeId,
+        fields: [
+          "place_id",
+          "name",
+          "formatted_address",
+          "geometry",
+          "address_components",
+        ],
+        sessionToken: APP.placeSessionToken || undefined,
+      },
+      (place, status) => {
+        const ok =
+          status === "OK" ||
+          status === window.google?.maps?.places?.PlacesServiceStatus?.OK;
+        resolve(ok && place ? place : null);
+      },
+    );
+  });
+}
+
+async function selectReportLookupItem(index) {
+  const item = APP.reportLookupItems[index];
+  hideReportLookupDropdown();
+  if (!item) return;
+
+  if (item.source === "local" && item.station) {
+    applyStationToReportForm(item.station);
+    return;
+  }
+
+  if (item.source === "google" && item.placeId) {
+    const place = await fetchGooglePlaceDetails(item.placeId);
+    if (!place) {
+      showToast("Não foi possível carregar os detalhes deste local.");
+      return;
+    }
+
+    clearResolvedReportLocation();
+    applyStationToReportForm(buildStationFromGooglePlace(place), {
+      fillStatus: false,
+      fillFuel: false,
+      fillNotes: false,
+    });
+    APP.placeSessionToken = null;
+  }
+}
+
+async function refreshReportLookup(query) {
+  const normalizedQuery = normalizeSheetLabel(query);
+  const requestId = ++APP.reportLookupRequestId;
+
+  if (normalizedQuery.length < CONFIG.LOOKUP_MIN_QUERY) {
+    hideReportLookupDropdown();
+    return;
+  }
+
+  const localItems = getLocalLookupItems(query);
+  const googleItems = await fetchGoogleLookupItems(query);
+  if (requestId !== APP.reportLookupRequestId) return;
+
+  const seen = new Set(
+    localItems.map((item) =>
+      normalizeSheetLabel(`${item.title}|${item.subtitle}`),
+    ),
+  );
+  const merged = [...localItems];
+
+  googleItems.forEach((item) => {
+    const fingerprint = normalizeSheetLabel(`${item.title}|${item.subtitle}`);
+    if (seen.has(fingerprint)) return;
+    seen.add(fingerprint);
+    merged.push(item);
+  });
+
+  renderReportLookupItems(merged.slice(0, CONFIG.LOOKUP_MAX_RESULTS));
+}
+
+function moveReportLookupSelection(direction) {
+  if (!APP.reportLookupItems.length) return;
+
+  const nextIndex =
+    APP.reportLookupIndex < 0
+      ? 0
+      : (APP.reportLookupIndex + direction + APP.reportLookupItems.length) %
+        APP.reportLookupItems.length;
+  setReportLookupActiveIndex(nextIndex);
+}
+
 function openModal({ keepHint = false } = {}) {
   if (!keepHint) $("#reportStationHint").classList.add("hidden");
   $("#reportModal").classList.remove("hidden");
   document.body.style.overflow = "hidden";
+  if (!keepHint) APP.placeSessionToken = null;
   if (!keepHint) fillHiddenReportFields();
-  setTimeout(() => $("#f_name").focus(), 100);
+  setTimeout(() => ($("#f_station_lookup") || $("#f_name"))?.focus(), 100);
 }
 
 function openReportForStation(station) {
@@ -1822,26 +2397,7 @@ function openReportForStation(station) {
     ? `${station.name} não tem classificação recente. Atualize o estado atual.`
     : `Atualizar estado de ${station.name}. Os dados atuais já foram preenchidos.`;
 
-  $("#f_name").value = station.name || "";
-  $("#f_address").value = station.address || "";
-  $("#f_city").value = station.city || "";
-  $("#f_neighborhood").value = station.neighborhood || "";
-  $("#f_fuel").value = normalizeFuelValue(station.fuelType || "both");
-  $("#f_notes").value = station.notes || "";
-  fillHiddenReportFields(station);
-
-  const statusValue = normalizeStatusValue(station.status);
-  $$("#reportForm input[type='radio']").forEach((radio) => {
-    radio.checked =
-      radio.value ===
-      (statusValue === "available"
-        ? "Disponivel"
-        : statusValue === "queue"
-          ? "Com fila"
-          : statusValue === "empty"
-            ? "Sem combustivel"
-            : "");
-  });
+  applyStationToReportForm(station);
 
   openModal({ keepHint: true });
 }
@@ -1850,6 +2406,8 @@ function closeModal() {
   $("#reportModal").classList.add("hidden");
   document.body.style.overflow = "";
   $("#reportForm").reset();
+  hideReportLookupDropdown();
+  APP.placeSessionToken = null;
   const msg = $("#formMessage");
   msg.classList.add("hidden");
   msg.className = "form-msg hidden";
@@ -1910,7 +2468,73 @@ function initEventListeners() {
 
   // Escape fecha modal
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeModal();
+    if (e.key !== "Escape") return;
+    if (APP.reportLookupItems.length) {
+      hideReportLookupDropdown();
+      return;
+    }
+    if (!$("#reportModal").classList.contains("hidden")) closeModal();
+  });
+
+  const lookupInput = $("#f_station_lookup");
+  lookupInput?.addEventListener("input", (e) => {
+    if (APP.suppressReportFieldSync) return;
+    clearResolvedReportLocation();
+    const query = e.target.value.trim();
+    clearTimeout(APP.reportLookupTimer);
+    APP.reportLookupTimer = setTimeout(() => {
+      void refreshReportLookup(query);
+    }, 180);
+  });
+  lookupInput?.addEventListener("focus", (e) => {
+    const query = e.target.value.trim();
+    if (query.length >= CONFIG.LOOKUP_MIN_QUERY) {
+      void refreshReportLookup(query);
+    }
+  });
+  lookupInput?.addEventListener("blur", () => {
+    setTimeout(hideReportLookupDropdown, 120);
+  });
+  lookupInput?.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveReportLookupSelection(1);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveReportLookupSelection(-1);
+      return;
+    }
+    if (e.key === "Enter" && APP.reportLookupItems.length) {
+      e.preventDefault();
+      void selectReportLookupItem(
+        APP.reportLookupIndex >= 0 ? APP.reportLookupIndex : 0,
+      );
+      return;
+    }
+    if (e.key === "Escape") {
+      hideReportLookupDropdown();
+    }
+  });
+
+  ["#f_name", "#f_address", "#f_city", "#f_neighborhood"].forEach((selector) => {
+    $(selector)?.addEventListener("input", () => {
+      if (APP.suppressReportFieldSync) return;
+      clearResolvedReportLocation();
+    });
+  });
+
+  $$("#reportForm input[type='radio']").forEach((radio) => {
+    radio.addEventListener("change", () => {
+      radio.closest(".radio-opt")?.classList.remove("error-radio");
+    });
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".lookup-shell")) {
+      hideReportLookupDropdown();
+    }
   });
 
   // Busca
@@ -2003,7 +2627,7 @@ function initEventListeners() {
           placeId: formData.get(CONFIG.FORM_ENTRY_IDS.placeId) || "",
           name: formData.get(CONFIG.FORM_ENTRY_IDS.name) || "Nova bomba",
           address: formData.get(CONFIG.FORM_ENTRY_IDS.address) || "",
-          province: formData.get(CONFIG.FORM_ENTRY_IDS.address) || "",
+          province: "",
           city: formData.get(CONFIG.FORM_ENTRY_IDS.city) || "",
           neighborhood: formData.get(CONFIG.FORM_ENTRY_IDS.neighborhood) || "",
           status:
@@ -2024,8 +2648,8 @@ function initEventListeners() {
           lat: parseCoordinate(formData.get(CONFIG.FORM_ENTRY_IDS.lat)),
           lng: parseCoordinate(formData.get(CONFIG.FORM_ENTRY_IDS.lng)),
         };
-        APP.stations.unshift(tempStation);
-        await hydrateStationCoordinates([tempStation]);
+        APP.stations = consolidateStationReports([tempStation, ...APP.stations]);
+        await hydrateStationCoordinates(APP.stations);
         applyFilters();
       }
 
