@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════
-   CombustívelMZ — app.js
+   Mhonono — app.js
    Monitoramento colaborativo de combustível em Moçambique
 
    CONFIGURAÇÃO RÁPIDA:
@@ -2119,7 +2119,7 @@ async function submitReport(formData) {
     });
     return { success: true };
   } catch (err) {
-    console.error("[CombustívelMZ] Falha ao enviar:", err);
+    console.error("[Mhonono] Falha ao enviar:", err);
     return { success: false, error: err.message };
   }
 }
