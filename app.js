@@ -35,7 +35,7 @@ const CONFIG = {
     status: "entry.1638569107", // Status (Ex: Disponivel)
     queueSize: "entry.1904078373", // Fila (Ex: Limpa)
     fuelType: "entry.716807350", // Combustível (Ex: Gasolina)
-    notes: "entry.1540951636", // ID provável para Observações*
+    notes: "entry.560588685", // ID provável para Observações*
   },
 
   // Intervalo de atualização automática (ms)
