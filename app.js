@@ -67,6 +67,16 @@ const CONFIG = {
   GEOCODE_MAX_PER_CYCLE: 12,
   GEOCODE_CACHE_KEY: "cmz_geocode_cache",
   PLACES_COUNTRY: "mz",
+  PLACES_REGION: "mz",
+  PLACES_LANGUAGE: "pt-PT",
+  PLACES_TYPES: ["gas_station"],
+  PLACES_LOOKUP_ORIGIN: { lat: -25.9653, lng: 32.5892 },
+  PLACES_LOOKUP_RESTRICTION: {
+    north: -25.78,
+    south: -26.08,
+    west: 32.43,
+    east: 32.75,
+  },
   LOOKUP_MIN_QUERY: 2,
   LOOKUP_MAX_RESULTS: 8,
 
@@ -231,7 +241,7 @@ const APP = {
   reportLookupTimer: null,
   suppressReportFieldSync: false,
 };
-const STATIONS_CACHE_VERSION = 5;
+const STATIONS_CACHE_VERSION = 6;
 
 /* ─────────────────────────────────────────────
    UTILITÁRIOS
@@ -701,6 +711,25 @@ function getStationLocationText(station, { includeAddress = false } = {}) {
   return [...new Set(parts.filter(Boolean))].join(" · ");
 }
 
+function isMaputoMatolaText(value) {
+  const text = normalizeSheetLabel(value);
+  return text.includes("maputo") || text.includes("matola");
+}
+
+function isMaputoMatolaStation(station) {
+  const locationText = [
+    station?.name,
+    station?.address,
+    station?.province,
+    station?.city,
+    station?.neighborhood,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return isMaputoMatolaText(locationText);
+}
+
 function hasCoordinates(station) {
   return (
     Number.isFinite(Number(station?.lat)) &&
@@ -743,9 +772,7 @@ function sortStationsByFreshnessAndTime(stations) {
 }
 
 function isMaputoStation(station) {
-  const locationText =
-    `${station.address || ""} ${station.province || ""} ${station.city || ""} ${station.neighborhood || ""}`.toLowerCase();
-  return locationText.includes("maputo") || locationText.includes("matola");
+  return isMaputoMatolaStation(station);
 }
 
 function updateLocationBanner() {
@@ -2016,6 +2043,46 @@ async function submitReport(formData) {
   }
 }
 
+function buildSubmittedStationFromFormData(formData) {
+  const placeId =
+    formData.get(CONFIG.FORM_ENTRY_IDS.placeId) || `temp_${Date.now()}`;
+  const city = formData.get(CONFIG.FORM_ENTRY_IDS.city) || "";
+  const address = formData.get(CONFIG.FORM_ENTRY_IDS.address) || "";
+  const neighborhood = formData.get(CONFIG.FORM_ENTRY_IDS.neighborhood) || "";
+  const province = isMaputoMatolaText(`${city} ${address}`)
+    ? normalizeSheetLabel(city).includes("matola")
+      ? "Maputo Província"
+      : "Maputo Cidade"
+    : "";
+
+  return {
+    id: placeId,
+    reportId: formData.get(CONFIG.FORM_ENTRY_IDS.reportId) || "",
+    placeId,
+    name: formData.get(CONFIG.FORM_ENTRY_IDS.name) || "Nova bomba",
+    address,
+    province,
+    city,
+    neighborhood,
+    status:
+      normalizeStatusValue(formData.get(CONFIG.FORM_ENTRY_IDS.status)) ||
+      "available",
+    queueSize: "",
+    fuelType:
+      normalizeFuelValue(formData.get(CONFIG.FORM_ENTRY_IDS.fuelType)) || "both",
+    notes: formData.get(CONFIG.FORM_ENTRY_IDS.notes) || "",
+    confirmations: parseConfirmations(
+      formData.get(CONFIG.FORM_ENTRY_IDS.confirmation),
+      0,
+    ),
+    timestamp:
+      formData.get(CONFIG.FORM_ENTRY_IDS.timestamp) ||
+      new Date().toISOString(),
+    lat: parseCoordinate(formData.get(CONFIG.FORM_ENTRY_IDS.lat)),
+    lng: parseCoordinate(formData.get(CONFIG.FORM_ENTRY_IDS.lng)),
+  };
+}
+
 /* ─────────────────────────────────────────────
    MODAL DO FORMULÁRIO
 ───────────────────────────────────────────── */
@@ -2184,6 +2251,7 @@ function getLocalLookupItems(query) {
   if (normalizedQuery.length < CONFIG.LOOKUP_MIN_QUERY) return [];
 
   return [...APP.stations]
+    .filter(isMaputoMatolaStation)
     .map((station) => ({
       station,
       score: getLookupScore(station, normalizedQuery),
@@ -2247,6 +2315,11 @@ function fetchGoogleLookupItems(query) {
     const request = {
       input: query,
       componentRestrictions: { country: CONFIG.PLACES_COUNTRY },
+      region: CONFIG.PLACES_REGION,
+      language: CONFIG.PLACES_LANGUAGE,
+      origin: CONFIG.PLACES_LOOKUP_ORIGIN,
+      locationRestriction: CONFIG.PLACES_LOOKUP_RESTRICTION,
+      types: CONFIG.PLACES_TYPES,
     };
     if (APP.placeSessionToken) request.sessionToken = APP.placeSessionToken;
 
@@ -2262,18 +2335,26 @@ function fetchGoogleLookupItems(query) {
         }
 
         resolve(
-          predictions.slice(0, CONFIG.LOOKUP_MAX_RESULTS).map((prediction) => ({
-            key: `google:${prediction.place_id}`,
-            source: "google",
-            placeId: prediction.place_id,
-            title:
-              prediction.structured_formatting?.main_text ||
-              prediction.description,
-            subtitle:
-              prediction.structured_formatting?.secondary_text ||
-              prediction.description,
-            meta: "Google Maps",
-          })),
+          predictions
+            .filter((prediction) =>
+              isMaputoMatolaText(
+                prediction.structured_formatting?.secondary_text ||
+                  prediction.description,
+              ),
+            )
+            .slice(0, CONFIG.LOOKUP_MAX_RESULTS)
+            .map((prediction) => ({
+              key: `google:${prediction.place_id}`,
+              source: "google",
+              placeId: prediction.place_id,
+              title:
+                prediction.structured_formatting?.main_text ||
+                prediction.description,
+              subtitle:
+                prediction.structured_formatting?.secondary_text ||
+                prediction.description,
+              meta: "Google Maps",
+            })),
         );
       },
     );
@@ -2320,6 +2401,24 @@ function buildStationFromGooglePlace(place) {
   };
 }
 
+function isAllowedGooglePlace(place) {
+  const types = Array.isArray(place?.types) ? place.types : [];
+  const locationText = [
+    place?.name,
+    place?.formatted_address,
+    getPlaceComponent(place, ["administrative_area_level_1"]),
+    getPlaceComponent(place, ["locality", "administrative_area_level_2"]),
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const looksLikeAllowedArea = isMaputoMatolaText(locationText);
+  const looksLikeFuelStation =
+    types.length === 0 || types.includes("gas_station");
+
+  return looksLikeAllowedArea && looksLikeFuelStation;
+}
+
 function fetchGooglePlaceDetails(placeId) {
   return new Promise((resolve) => {
     if (!ensurePlacesLookupServices() || !placeId) {
@@ -2336,6 +2435,7 @@ function fetchGooglePlaceDetails(placeId) {
           "formatted_address",
           "geometry",
           "address_components",
+          "types",
         ],
         sessionToken: APP.placeSessionToken || undefined,
       },
@@ -2363,6 +2463,10 @@ async function selectReportLookupItem(index) {
     const place = await fetchGooglePlaceDetails(item.placeId);
     if (!place) {
       showToast("Não foi possível carregar os detalhes deste local.");
+      return;
+    }
+    if (!isAllowedGooglePlace(place)) {
+      showToast("Selecione apenas bombas de combustível em Maputo ou Matola.");
       return;
     }
 
@@ -2654,42 +2758,12 @@ function initEventListeners() {
         ? " (modo demo — configure o Google Forms para envio real)"
         : "";
       showFormMessage(`✅ Reporte enviado com sucesso!${mockNote}`, "success");
+      const tempStation = buildSubmittedStationFromFormData(formData);
+      APP.stations = consolidateStationReports([tempStation, ...APP.stations]);
+      await hydrateStationCoordinates(APP.stations);
+      cacheStations(APP.stations);
+      applyFilters();
       form.reset();
-
-      // Se mock, adiciona à lista temporariamente
-      if (result.mock) {
-        const tempStation = {
-          id:
-            formData.get(CONFIG.FORM_ENTRY_IDS.placeId) || "temp_" + Date.now(),
-          reportId: formData.get(CONFIG.FORM_ENTRY_IDS.reportId) || "",
-          placeId: formData.get(CONFIG.FORM_ENTRY_IDS.placeId) || "",
-          name: formData.get(CONFIG.FORM_ENTRY_IDS.name) || "Nova bomba",
-          address: formData.get(CONFIG.FORM_ENTRY_IDS.address) || "",
-          province: "",
-          city: formData.get(CONFIG.FORM_ENTRY_IDS.city) || "",
-          neighborhood: formData.get(CONFIG.FORM_ENTRY_IDS.neighborhood) || "",
-          status:
-            normalizeStatusValue(formData.get(CONFIG.FORM_ENTRY_IDS.status)) ||
-            "available",
-          queueSize: "",
-          fuelType:
-            normalizeFuelValue(formData.get(CONFIG.FORM_ENTRY_IDS.fuelType)) ||
-            "both",
-          notes: formData.get(CONFIG.FORM_ENTRY_IDS.notes) || "",
-          confirmations: parseConfirmations(
-            formData.get(CONFIG.FORM_ENTRY_IDS.confirmation),
-            0,
-          ),
-          timestamp:
-            formData.get(CONFIG.FORM_ENTRY_IDS.timestamp) ||
-            new Date().toISOString(),
-          lat: parseCoordinate(formData.get(CONFIG.FORM_ENTRY_IDS.lat)),
-          lng: parseCoordinate(formData.get(CONFIG.FORM_ENTRY_IDS.lng)),
-        };
-        APP.stations = consolidateStationReports([tempStation, ...APP.stations]);
-        await hydrateStationCoordinates(APP.stations);
-        applyFilters();
-      }
 
       setTimeout(closeModal, 2500);
     } else {
