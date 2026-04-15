@@ -276,11 +276,7 @@
                 </span>
               </label>
               <label class="radio-opt yellow-opt">
-                <input
-                  type="radio"
-                  name="entry.1115978662"
-                  value="Com fila"
-                />
+                <input type="radio" name="entry.1115978662" value="Com fila" />
                 <span class="radio-label">
                   <span class="material-symbols-outlined icon-inline"
                     >schedule</span
@@ -347,102 +343,6 @@
     </div>
 
     <div id="toast" class="toast hidden" role="alert"></div>
-
-    <div id="setupGuide" class="modal-overlay hidden">
-      <div class="modal-box setup-box">
-        <h2>
-          <span class="material-symbols-outlined icon-inline">settings</span>
-          <span>Guia de Configuração</span>
-        </h2>
-        <p>
-          Esta app usa Google Forms + Google Sheets como backend gratuito. Siga
-          os passos:
-        </p>
-
-        <div class="setup-steps">
-          <details>
-            <summary>
-              <strong>1. Criar Google Form e obter entry IDs</strong>
-            </summary>
-            <ol>
-              <li>
-                Crie um Google Form com os campos: Nome da Bomba, Província,
-                Cidade, Bairro, Status, Fila, Combustível, Observações.
-              </li>
-              <li>
-                Clique direito → <em>Inspecionar</em> na página de
-                pré-visualização do form.
-              </li>
-              <li>
-                Procure por <code>entry.XXXXXXXXXX</code> nos inputs. Cada campo
-                tem um ID único.
-              </li>
-              <li>
-                Substitua os <code>entry.1111111111</code> nos campos do
-                formulário neste HTML pelos IDs reais.
-              </li>
-              <li>
-                Substitua <code>SEU_FORM_ID</code> no ficheiro
-                <code>app.js</code> pelo ID do seu form.
-              </li>
-            </ol>
-          </details>
-          <details>
-            <summary>
-              <strong>2. Obter link JSON do Google Sheets</strong>
-            </summary>
-            <ol>
-              <li>
-                Abra a Google Sheet ligada ao form em Respostas → Ver no Sheets.
-              </li>
-              <li>
-                Partilhe a sheet como
-                <em>Qualquer pessoa com o link pode ver</em>.
-              </li>
-              <li>
-                O link JSON público é
-                <code
-                  >https://docs.google.com/spreadsheets/d/SEU_SHEET_ID/gviz/tq?tqx=out:json</code
-                >.
-              </li>
-              <li>
-                Substitua <code>SEU_SHEET_ID</code> no ficheiro
-                <code>app.js</code>.
-              </li>
-            </ol>
-          </details>
-          <details>
-            <summary><strong>3. Hospedar no GitHub Pages</strong></summary>
-            <ol>
-              <li>Crie um repositório público no GitHub.</li>
-              <li>
-                Envie os ficheiros <code>index.html</code>,
-                <code>style.css</code> e <code>app.js</code>.
-              </li>
-              <li>
-                Em <em>Settings → Pages</em>, selecione branch
-                <code>main</code> e pasta <code>/ (root)</code>.
-              </li>
-              <li>
-                A app fica disponível em
-                <code>https://seuuser.github.io/seu-repo/</code>.
-              </li>
-            </ol>
-          </details>
-        </div>
-
-        <p class="setup-note">
-          <span class="material-symbols-outlined icon-inline"
-            >warning_amber</span
-          >
-          <span
-            >Sem Google Forms configurado, os relatórios ficam apenas nesta
-            sessão local.</span
-          >
-        </p>
-        <button class="btn btn-primary" id="closeSetupBtn">Entendido</button>
-      </div>
-    </div>
 
     <script>
       window.__gmAuthFailed = false;
