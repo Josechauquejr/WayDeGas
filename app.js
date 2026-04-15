@@ -18,24 +18,24 @@
    CONFIG — ALTERE AQUI COM OS SEUS IDs REAIS
 ───────────────────────────────────────────── */
 const CONFIG = {
-  // URL de submissão do Google Form
-  GOOGLE_FORM_URL: "https://docs.google.com/forms/d/e/SEU_FORM_ID/formResponse",
+  // URL correta para submissão via POST (endpoint de resposta)
+  GOOGLE_FORM_URL:
+    "https://docs.google.com/forms/d/e/1FAIpQLSfsvipLk_BZfIVZE21jwSpV1v6HzwfYESNJfDgahYx8c7gkaw/formResponse",
 
-  // URL JSON público da Google Sheet (respostas do form)
-  // Formato: https://docs.google.com/spreadsheets/d/SEU_SHEET_ID/gviz/tq?tqx=out:json
+  // URL JSON público da Google Sheet
   SHEETS_JSON_URL:
-    "https://docs.google.com/spreadsheets/d/SEU_SHEET_ID/gviz/tq?tqx=out:json",
+    "https://docs.google.com/spreadsheets/d/12dAC-9JAXL5doiHNW7okev6FoUMqHv5c7ZvABBO2SqM/gviz/tq?tqx=out:json",
 
-  // Entry IDs do Google Form — substitua pelos reais
+  // Entry IDs reais extraídos do seu link preenchido
   FORM_ENTRY_IDS: {
-    name: "entry.1111111111",
-    province: "entry.2222222222",
-    city: "entry.3333333333",
-    neighborhood: "entry.4444444444",
-    status: "entry.5555555555",
-    queueSize: "entry.6666666666",
-    fuelType: "entry.7777777777",
-    notes: "entry.8888888888",
+    name: "entry.504966515", // Nome da Bomba
+    province: "entry.667890039", // Província
+    city: "entry.850024881", // Cidade
+    neighborhood: "entry.454703331", // Bairro
+    status: "entry.1638569107", // Status (Ex: Disponivel)
+    queueSize: "entry.1904078373", // Fila (Ex: Limpa)
+    fuelType: "entry.716807350", // Combustível (Ex: Gasolina)
+    notes: "entry.1540951636", // ID provável para Observações*
   },
 
   // Intervalo de atualização automática (ms)
@@ -53,7 +53,7 @@ const CONFIG = {
   NEARBY_MAX_RESULTS: 50,
 
   // Usar dados mock enquanto não configurado
-  USE_MOCK: true,
+  USE_MOCK: false,
 };
 
 /* ─────────────────────────────────────────────
@@ -209,6 +209,31 @@ const APP = {
 ───────────────────────────────────────────── */
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
+
+function syncFormEntryNamesFromConfig() {
+  const fieldMap = [
+    { selector: "#f_name", key: "name" },
+    { selector: "#f_province", key: "province" },
+    { selector: "#f_city", key: "city" },
+    { selector: "#f_neighborhood", key: "neighborhood" },
+    { selector: "#f_queue", key: "queueSize" },
+    { selector: "#f_fuel", key: "fuelType" },
+    { selector: "#f_notes", key: "notes" },
+  ];
+
+  fieldMap.forEach(({ selector, key }) => {
+    const el = $(selector);
+    const entryId = CONFIG.FORM_ENTRY_IDS[key];
+    if (el && entryId) el.setAttribute("name", entryId);
+  });
+
+  const statusEntryId = CONFIG.FORM_ENTRY_IDS.status;
+  if (statusEntryId) {
+    $$("#reportForm input[type='radio']").forEach((radio) => {
+      radio.setAttribute("name", statusEntryId);
+    });
+  }
+}
 
 function isMobileViewport() {
   return window.matchMedia("(max-width: 900px)").matches;
@@ -475,12 +500,15 @@ function initMap() {
       attributionControl: true,
     });
 
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org">OpenStreetMap</a> &copy; <a href="https://carto.com">CARTO</a>',
-      subdomains: "abcd",
-      maxZoom: 19,
-    }).addTo(APP.map);
+    L.tileLayer(
+      "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+      {
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org">OpenStreetMap</a> &copy; <a href="https://carto.com">CARTO</a>',
+        subdomains: "abcd",
+        maxZoom: 19,
+      },
+    ).addTo(APP.map);
 
     showToast("Google Maps indisponível. A usar mapa alternativo.");
     return;
@@ -713,7 +741,11 @@ function focusMapForCurrentFilter(stations) {
     if (stations.some((s) => s.lat && s.lng)) {
       fitMapToStations(stations, { maxZoom: CONFIG.MAPUTO_ZOOM + 1 });
     } else {
-      flyTo(CONFIG.MAPUTO_CENTER[0], CONFIG.MAPUTO_CENTER[1], CONFIG.MAPUTO_ZOOM);
+      flyTo(
+        CONFIG.MAPUTO_CENTER[0],
+        CONFIG.MAPUTO_CENTER[1],
+        CONFIG.MAPUTO_ZOOM,
+      );
     }
     return;
   }
@@ -1038,28 +1070,88 @@ function requestGeolocation() {
    CARREGAMENTO DE DADOS
 ───────────────────────────────────────────── */
 
+function normalizeSheetLabel(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function buildSheetColumnIndex(columns) {
+  const index = {};
+  const rules = [
+    { key: "timestamp", patterns: [/timestamp/, /hora/, /data/] },
+    { key: "name", patterns: [/nome.*bomba/, /^nome$/] },
+    { key: "province", patterns: [/provincia/] },
+    { key: "city", patterns: [/cidade/] },
+    { key: "neighborhood", patterns: [/bairro/, /zona/] },
+    { key: "status", patterns: [/estado/, /status/, /situacao/] },
+    { key: "queueSize", patterns: [/fila/, /queue/] },
+    { key: "fuelType", patterns: [/combustivel/, /fuel/] },
+    { key: "notes", patterns: [/observa/, /nota/, /coment/] },
+    { key: "lat", patterns: [/^lat$/, /latitude/] },
+    { key: "lng", patterns: [/^lng$/, /longitude/, /long/] },
+  ];
+
+  (columns || []).forEach((col, i) => {
+    const label = normalizeSheetLabel(col?.label || col?.id || "");
+    if (!label) return;
+
+    rules.forEach(({ key, patterns }) => {
+      if (index[key] !== undefined) return;
+      if (patterns.some((re) => re.test(label))) {
+        index[key] = i;
+      }
+    });
+  });
+
+  return index;
+}
+
+function parseCoordinate(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const num = Number(String(value).replace(",", "."));
+  return Number.isFinite(num) ? num : null;
+}
+
 /** Converte linha da Google Sheets para objeto station */
-function sheetsRowToStation(row, index) {
-  // Colunas esperadas (pela ordem das perguntas do form):
-  // 0: Timestamp, 1: Nome, 2: Província, 3: Cidade, 4: Bairro,
-  // 5: Status, 6: Fila, 7: Combustível, 8: Observações
+function sheetsRowToStation(row, index, colIndex = {}) {
   const cols = row.c || [];
-  const get = (i) => (cols[i] && cols[i].v != null ? String(cols[i].v) : "");
+  const getByIndex = (i) =>
+    typeof i === "number" && cols[i] && cols[i].v != null
+      ? String(cols[i].v)
+      : "";
+  const getByKey = (key) => getByIndex(colIndex[key]);
+
+  // fallback por posição mantém compatibilidade com formulários antigos
+  const timestamp =
+    getByKey("timestamp") || getByIndex(0) || new Date().toISOString();
+  const name = getByKey("name") || getByIndex(1) || "Bomba sem nome";
+  const province = getByKey("province") || getByIndex(2) || "";
+  const city = getByKey("city") || getByIndex(3) || "";
+  const neighborhood = getByKey("neighborhood") || getByIndex(4) || "";
+  const status = getByKey("status") || getByIndex(5) || "";
+  const queueSize = getByKey("queueSize") || getByIndex(6) || "none";
+  const fuelType = getByKey("fuelType") || getByIndex(7) || "both";
+  const notes = getByKey("notes") || getByIndex(8) || "";
+  const lat = parseCoordinate(getByKey("lat"));
+  const lng = parseCoordinate(getByKey("lng"));
 
   return {
     id: `sheet_${index}`,
-    timestamp: get(0) || new Date().toISOString(),
-    name: get(1) || "Bomba sem nome",
-    province: get(2) || "",
-    city: get(3) || "",
-    neighborhood: get(4) || "",
-    status: get(5) || "",
-    queueSize: get(6) || "none",
-    fuelType: get(7) || "both",
-    notes: get(8) || "",
+    timestamp,
+    name,
+    province,
+    city,
+    neighborhood,
+    status,
+    queueSize,
+    fuelType,
+    notes,
     confirmations: 0,
-    lat: null,
-    lng: null,
+    lat,
+    lng,
   };
 }
 
@@ -1074,9 +1166,11 @@ async function loadFromSheets() {
     text = text.replace(/^[^(]+\(/, "").replace(/\);?\s*$/, "");
 
     const json = JSON.parse(text);
-    const rows = (json.table && json.table.rows) || [];
+    const table = json.table || {};
+    const rows = table.rows || [];
+    const colIndex = buildSheetColumnIndex(table.cols || []);
 
-    return rows.slice(1).map(sheetsRowToStation); // ignora cabeçalho
+    return rows.map((row, i) => sheetsRowToStation(row, i, colIndex));
   } catch (err) {
     console.warn(
       "[CombustívelMZ] Falha ao carregar Google Sheets:",
@@ -1349,6 +1443,7 @@ function startAutoRefresh() {
 async function init() {
   loadConfirmations();
   initMap();
+  syncFormEntryNamesFromConfig();
   initEventListeners();
   handleViewportForMapToggle();
   setMobileMapVisible(false);
