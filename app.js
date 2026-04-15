@@ -231,7 +231,7 @@ const APP = {
   reportLookupTimer: null,
   suppressReportFieldSync: false,
 };
-const STATIONS_CACHE_VERSION = 4;
+const STATIONS_CACHE_VERSION = 5;
 
 /* ─────────────────────────────────────────────
    UTILITÁRIOS
@@ -1612,11 +1612,19 @@ function buildSheetColumnIndex(columns) {
   const index = {};
   const rules = [
     {
+      key: "reportTimestamp",
+      patterns: [
+        /^timetamps?$/,
+        /^report.*timestamp$/,
+        /^timestamp.*report$/,
+        /^hora.*reporte$/,
+      ],
+    },
+    {
       key: "timestamp",
       patterns: [
-        /timestamp/,
-        /timestamps?/,
-        /timetamps?/,
+        /^timestamp$/,
+        /^timestamp\b/,
         /carimbo/,
         /data.*hora/,
         /hora.*data/,
@@ -1677,6 +1685,19 @@ function buildSheetColumnIndex(columns) {
   });
 
   return index;
+}
+
+function resolveStationTimestampSources({ primaryValue, secondaryValue, fallbackValue }) {
+  const primary = parseDateValue(primaryValue);
+  if (primary) return primary.toISOString();
+
+  const secondary = parseDateValue(secondaryValue);
+  if (secondary) return secondary.toISOString();
+
+  const fallback = parseDateValue(fallbackValue);
+  if (fallback) return fallback.toISOString();
+
+  return new Date().toISOString();
 }
 
 function parseCoordinate(value) {
@@ -1740,12 +1761,18 @@ function sheetsRowToStation(row, index, colIndex = {}) {
   const getTextByKey = (key) => getTextByIndex(colIndex[key]);
 
   // fallback por posição mantém compatibilidade com formulários antigos
-  const timestamp = resolveSheetTimestamp({
-    timestampValue: getRawByKey("timestamp"),
-    dateValue: getRawByKey("date"),
-    timeValue: getRawByKey("time"),
-    fallbackValue: getRawByCandidates([0, 1]),
-  });
+  const timestamp = getRawByKey("reportTimestamp")
+    ? resolveStationTimestampSources({
+        primaryValue: getRawByKey("reportTimestamp"),
+        secondaryValue: getRawByKey("timestamp"),
+        fallbackValue: getRawByCandidates([1, 0]),
+      })
+    : resolveSheetTimestamp({
+        timestampValue: getRawByKey("timestamp"),
+        dateValue: getRawByKey("date"),
+        timeValue: getRawByKey("time"),
+        fallbackValue: getRawByCandidates([1, 0]),
+      });
 
   const reportId = getTextByKey("reportId") || getTextByCandidates([2, 1]) || "";
   const placeId = getTextByKey("placeId") || getTextByCandidates([3, 2]) || "";
@@ -1796,10 +1823,9 @@ function sheetsRowToStation(row, index, colIndex = {}) {
 
 function getStationGroupKey(station, index = 0) {
   const placeId = normalizeSheetLabel(station?.placeId);
-  if (placeId) return `place:${placeId}`;
+  if (placeId && !placeId.startsWith("manual-")) return `place:${placeId}`;
 
-  const manualKey = [
-    station?.name,
+  const manualLocationKey = [
     station?.address,
     station?.city,
     station?.neighborhood,
@@ -1807,7 +1833,19 @@ function getStationGroupKey(station, index = 0) {
     .map((part) => normalizeSheetLabel(part))
     .filter(Boolean)
     .join("|");
+  if (manualLocationKey) return `manual:${manualLocationKey}`;
+
+  const manualKey = [
+    station?.name,
+    station?.city,
+    station?.neighborhood,
+  ]
+    .map((part) => normalizeSheetLabel(part))
+    .filter(Boolean)
+    .join("|");
   if (manualKey) return `manual:${manualKey}`;
+
+  if (placeId) return `place:${placeId}`;
 
   const reportId = normalizeSheetLabel(station?.reportId);
   if (reportId) return `report:${reportId}`;
