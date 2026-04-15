@@ -357,9 +357,7 @@ function handleViewportForMapToggle() {
 function buildGoogleMapsDirectionsUrl(station) {
   const destination = hasCoordinates(station)
     ? `${Number(station.lat)},${Number(station.lng)}`
-    : [station?.address, station?.neighborhood, station?.city, station?.province]
-        .filter(Boolean)
-        .join(", ");
+    : String(station?.address || "").trim();
   if (!destination) return "";
 
   return `https://www.google.com/maps/dir/?${new URLSearchParams({
@@ -1026,23 +1024,10 @@ function getStationGeocodeKey(station) {
 }
 
 function getStationGeocodeQueries(station) {
-  const country = CONFIG.GEOCODE_COUNTRY;
   const options = [
-    [station.address, station.city, country].filter(Boolean).join(", "),
-    [
-      station.name,
-      station.address,
-      station.neighborhood,
-      station.city,
-      station.province,
-      country,
-    ]
-      .filter(Boolean)
-      .join(", "),
-    [station.neighborhood, station.city, station.province, country]
-      .filter(Boolean)
-      .join(", "),
-    [station.city, station.province, country].filter(Boolean).join(", "),
+    String(station?.address || "").trim(),
+    [station.name, station.address].filter(Boolean).join(", "),
+    [station.neighborhood, station.address].filter(Boolean).join(", "),
   ];
 
   return [...new Set(options.filter(Boolean))];
