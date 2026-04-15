@@ -51,6 +51,9 @@ const CONFIG = {
   // Distância considerada "perto de mim"
   NEARBY_RADIUS_KM: 20,
   NEARBY_MAX_RESULTS: 50,
+  GEOCODE_COUNTRY: "Mozambique",
+  GEOCODE_MAX_PER_CYCLE: 12,
+  GEOCODE_CACHE_KEY: "cmz_geocode_cache",
 
   // Usar dados mock enquanto não configurado
   USE_MOCK: false,
@@ -202,7 +205,10 @@ const APP = {
   userLocationLayer: null,
   refreshTimer: null,
   confirmations: {}, // { stationId: count } — persistido em localStorage
+  geocodeCache: {},
+  geocoder: null,
 };
+const STATIONS_CACHE_VERSION = 3;
 
 /* ─────────────────────────────────────────────
    UTILITÁRIOS
@@ -250,6 +256,12 @@ function syncMapToggleButton() {
   btn.setAttribute("aria-expanded", visible ? "true" : "false");
 }
 
+function syncNearChipLabel() {
+  const nearChip = $('[data-filter="near"]');
+  if (!nearChip) return;
+  nearChip.textContent = `Perto de mim (${CONFIG.NEARBY_RADIUS_KM} km)`;
+}
+
 function refreshMapAfterLayoutChange() {
   if (!APP.map) return;
 
@@ -289,22 +301,198 @@ function handleViewportForMapToggle() {
   syncMapToggleButton();
 }
 
+function isValidDateObject(value) {
+  return value instanceof Date && !Number.isNaN(value.getTime());
+}
+
+function parseGvizDateLiteral(value) {
+  const match = String(value || "")
+    .trim()
+    .match(/^Date\(([^)]+)\)$/i);
+  if (!match) return null;
+
+  const parts = match[1]
+    .split(",")
+    .map((part) => Number(part.trim()))
+    .filter((part) => !Number.isNaN(part));
+
+  if (!parts.length) return null;
+
+  const [year = 0, month = 0, day = 1, hour = 0, minute = 0, second = 0, ms = 0] =
+    parts;
+  const date = new Date(year, month, day, hour, minute, second, ms);
+  return isValidDateObject(date) ? date : null;
+}
+
+function parseDateValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+
+  if (isValidDateObject(value)) return new Date(value.getTime());
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const asDate = new Date(value);
+    if (isValidDateObject(asDate)) return asDate;
+  }
+
+  const text = String(value).trim();
+  if (!text) return null;
+
+  const gvizDate = parseGvizDateLiteral(text);
+  if (gvizDate) return gvizDate;
+
+  // Ignora valor apenas com hora (sem data)
+  if (/^\d{1,2}(?::|h)\d{2}(?::\d{2})?$/.test(text)) return null;
+
+  const dmyMatch = text.match(
+    /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/,
+  );
+  if (dmyMatch) {
+    const day = Number(dmyMatch[1]);
+    const month = Number(dmyMatch[2]) - 1;
+    const yearRaw = Number(dmyMatch[3]);
+    const year = yearRaw < 100 ? 2000 + yearRaw : yearRaw;
+    const hour = Number(dmyMatch[4] || 0);
+    const minute = Number(dmyMatch[5] || 0);
+    const second = Number(dmyMatch[6] || 0);
+
+    const date = new Date(year, month, day, hour, minute, second);
+    if (
+      isValidDateObject(date) &&
+      date.getFullYear() === year &&
+      date.getMonth() === month &&
+      date.getDate() === day
+    ) {
+      return date;
+    }
+  }
+
+  const ymdMatch = text.match(
+    /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/,
+  );
+  if (ymdMatch) {
+    const year = Number(ymdMatch[1]);
+    const month = Number(ymdMatch[2]) - 1;
+    const day = Number(ymdMatch[3]);
+    const hour = Number(ymdMatch[4] || 0);
+    const minute = Number(ymdMatch[5] || 0);
+    const second = Number(ymdMatch[6] || 0);
+    const date = new Date(year, month, day, hour, minute, second);
+    if (
+      isValidDateObject(date) &&
+      date.getFullYear() === year &&
+      date.getMonth() === month &&
+      date.getDate() === day
+    ) {
+      return date;
+    }
+  }
+
+  const parsed = new Date(text);
+  return isValidDateObject(parsed) ? parsed : null;
+}
+
+function parseTimeValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+
+  if (isValidDateObject(value)) {
+    return {
+      hours: value.getHours(),
+      minutes: value.getMinutes(),
+      seconds: value.getSeconds(),
+    };
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    // Alguns Sheets retornam hora como fracção do dia (ex: 0.5 = 12:00)
+    const dayFraction = Math.abs(value % 1);
+    const totalSeconds = Math.round(dayFraction * 24 * 60 * 60);
+    return {
+      hours: Math.floor(totalSeconds / 3600) % 24,
+      minutes: Math.floor((totalSeconds % 3600) / 60),
+      seconds: totalSeconds % 60,
+    };
+  }
+
+  const text = String(value).trim();
+  if (!text) return null;
+
+  const gvizDate = parseGvizDateLiteral(text);
+  if (gvizDate) {
+    return {
+      hours: gvizDate.getHours(),
+      minutes: gvizDate.getMinutes(),
+      seconds: gvizDate.getSeconds(),
+    };
+  }
+
+  const match = text.match(/(\d{1,2})(?::|h)(\d{2})(?::(\d{2}))?/i);
+  if (!match) return null;
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3] || 0);
+
+  if (
+    Number.isNaN(hours) ||
+    Number.isNaN(minutes) ||
+    Number.isNaN(seconds) ||
+    hours > 23 ||
+    minutes > 59 ||
+    seconds > 59
+  ) {
+    return null;
+  }
+
+  return { hours, minutes, seconds };
+}
+
+function resolveSheetTimestamp({
+  timestampValue,
+  dateValue,
+  timeValue,
+  fallbackValue,
+}) {
+  const direct = parseDateValue(timestampValue);
+  if (direct) return direct.toISOString();
+
+  const datePart = parseDateValue(dateValue);
+  if (datePart) {
+    const timePart = parseTimeValue(timeValue || timestampValue);
+    if (timePart) {
+      datePart.setHours(timePart.hours, timePart.minutes, timePart.seconds, 0);
+    }
+    return datePart.toISOString();
+  }
+
+  const fallback = parseDateValue(fallbackValue);
+  if (fallback) return fallback.toISOString();
+
+  return new Date().toISOString();
+}
+
 /** Formata duração em minutos/horas desde timestamp */
-function timeAgo(isoString) {
-  const diff = Math.floor((Date.now() - new Date(isoString)) / 1000);
+function timeAgo(value) {
+  const parsedDate = parseDateValue(value);
+  if (!parsedDate) return "hora desconhecida";
+
+  const diff = Math.floor((Date.now() - parsedDate.getTime()) / 1000);
   if (diff < 60) return `${diff}s atrás`;
   if (diff < 3600) return `${Math.floor(diff / 60)}min atrás`;
   return `${Math.floor(diff / 3600)}h atrás`;
 }
 
 /** Verifica se o dado é antigo (> STALE_THRESHOLD) */
-function isStale(isoString) {
-  return Date.now() - new Date(isoString) > CONFIG.STALE_THRESHOLD;
+function isStale(value) {
+  const parsedDate = parseDateValue(value);
+  if (!parsedDate) return true;
+  return Date.now() - parsedDate.getTime() > CONFIG.STALE_THRESHOLD;
 }
 
 /** Verifica se é recente (< 30 min) */
-function isRecent(isoString) {
-  return Date.now() - new Date(isoString) < 30 * 60 * 1000;
+function isRecent(value) {
+  const parsedDate = parseDateValue(value);
+  if (!parsedDate) return false;
+  return Date.now() - parsedDate.getTime() < 30 * 60 * 1000;
 }
 
 /** Calcula distância em km (Haversine) */
@@ -341,6 +529,43 @@ const FUEL_OPTIONS = {
   diesel: { label: "Diesel", icon: "oil_barrel" },
 };
 
+function normalizeStatusValue(value) {
+  const normalized = normalizeSheetLabel(value);
+  if (!normalized) return "";
+
+  if (["available", "disponivel", "com combustivel"].includes(normalized)) {
+    return "available";
+  }
+  if (["queue", "com fila", "fila"].includes(normalized)) return "queue";
+  if (["empty", "sem combustivel", "esgotado"].includes(normalized)) {
+    return "empty";
+  }
+  if (["unknown", "desconhecido", "sem classificacao"].includes(normalized)) {
+    return "unknown";
+  }
+  return "";
+}
+
+function normalizeQueueValue(value) {
+  const normalized = normalizeSheetLabel(value);
+  if (!normalized) return "none";
+  if (["none", "sem fila"].includes(normalized)) return "none";
+  if (["short", "curta", "fila curta"].includes(normalized)) return "short";
+  if (["medium", "media", "fila media"].includes(normalized)) return "medium";
+  if (["long", "longa", "fila longa"].includes(normalized)) return "long";
+  return "none";
+}
+
+function normalizeFuelValue(value) {
+  const normalized = normalizeSheetLabel(value);
+  if (!normalized) return "both";
+  if (["both", "ambos", "gasolina + diesel"].includes(normalized))
+    return "both";
+  if (["gasoline", "gasolina"].includes(normalized)) return "gasoline";
+  if (["diesel"].includes(normalized)) return "diesel";
+  return "both";
+}
+
 function renderIcon(iconId) {
   return `<span class="material-symbols-outlined icon-inline" aria-hidden="true">${iconId}</span>`;
 }
@@ -361,20 +586,28 @@ function getDistancePill(station) {
   return `<span class="meta-pill distance">${renderIcon("location_on")} ${station.distance.toFixed(1)} km</span>`;
 }
 
+function hasCoordinates(station) {
+  return (
+    Number.isFinite(Number(station?.lat)) &&
+    Number.isFinite(Number(station?.lng))
+  );
+}
+
 function getEffectiveStatus(station) {
-  if (!station.status || isStale(station.timestamp)) return "unknown";
-  return station.status;
+  const normalizedStatus = normalizeStatusValue(station.status);
+  if (!normalizedStatus || isStale(station.timestamp)) return "unknown";
+  return normalizedStatus;
 }
 
 function annotateDistances(stations) {
   if (APP.userLat === null || APP.userLng === null) return;
   stations.forEach((station) => {
-    if (station.lat && station.lng) {
+    if (hasCoordinates(station)) {
       station.distance = haversine(
         APP.userLat,
         APP.userLng,
-        station.lat,
-        station.lng,
+        Number(station.lat),
+        Number(station.lng),
       );
     } else {
       station.distance = null;
@@ -388,7 +621,9 @@ function sortStationsByFreshnessAndTime(stations) {
     const bStale = isStale(b.timestamp) ? 1 : 0;
 
     if (aStale !== bStale) return aStale - bStale;
-    return new Date(b.timestamp) - new Date(a.timestamp);
+    const aTime = parseDateValue(a.timestamp)?.getTime() || 0;
+    const bTime = parseDateValue(b.timestamp)?.getTime() || 0;
+    return bTime - aTime;
   });
 }
 
@@ -453,11 +688,29 @@ function saveConfirmations() {
   localStorage.setItem("cmz_confirms", JSON.stringify(APP.confirmations));
 }
 
+function loadGeocodeCache() {
+  try {
+    APP.geocodeCache = JSON.parse(
+      localStorage.getItem(CONFIG.GEOCODE_CACHE_KEY) || "{}",
+    );
+  } catch {
+    APP.geocodeCache = {};
+  }
+}
+
+function saveGeocodeCache() {
+  localStorage.setItem(
+    CONFIG.GEOCODE_CACHE_KEY,
+    JSON.stringify(APP.geocodeCache || {}),
+  );
+}
+
 function loadCachedStations() {
   try {
     const raw = localStorage.getItem("cmz_stations");
     if (!raw) return null;
-    const { data, ts } = JSON.parse(raw);
+    const { data, ts, v } = JSON.parse(raw);
+    if (v !== STATIONS_CACHE_VERSION) return null;
     // Cache válido por 5 minutos
     if (Date.now() - ts < 5 * 60 * 1000) return data;
   } catch {}
@@ -467,7 +720,7 @@ function loadCachedStations() {
 function cacheStations(data) {
   localStorage.setItem(
     "cmz_stations",
-    JSON.stringify({ data, ts: Date.now() }),
+    JSON.stringify({ data, ts: Date.now(), v: STATIONS_CACHE_VERSION }),
   );
 }
 
@@ -488,11 +741,13 @@ function initMap() {
       fullscreenControl: true,
     });
     APP.infoWindow = new google.maps.InfoWindow();
+    APP.geocoder = new google.maps.Geocoder();
     return;
   }
 
   if (window.L) {
     APP.mapProvider = "leaflet";
+    APP.geocoder = null;
     APP.map = L.map("map", {
       center: [-18.7, 35.3],
       zoom: 5,
@@ -515,10 +770,148 @@ function initMap() {
   }
 
   APP.mapProvider = "none";
+  APP.geocoder = null;
   const mapEl = document.getElementById("map");
   if (mapEl) {
     mapEl.innerHTML =
       '<div style="padding:16px;color:#f5a623;font-family:Space Mono,monospace">Não foi possível carregar nenhum provedor de mapa.</div>';
+  }
+}
+
+function getStationGeocodeKey(station) {
+  const parts = [
+    station?.name,
+    station?.neighborhood,
+    station?.city,
+    station?.province,
+  ]
+    .map((part) => normalizeSheetLabel(part))
+    .filter(Boolean);
+
+  return parts.join("|");
+}
+
+function getStationGeocodeQueries(station) {
+  const country = CONFIG.GEOCODE_COUNTRY;
+  const options = [
+    [station.name, station.neighborhood, station.city, station.province, country]
+      .filter(Boolean)
+      .join(", "),
+    [station.neighborhood, station.city, station.province, country]
+      .filter(Boolean)
+      .join(", "),
+    [station.city, station.province, country].filter(Boolean).join(", "),
+  ];
+
+  return [...new Set(options.filter(Boolean))];
+}
+
+function hasRecentFailedGeocode(cacheEntry) {
+  if (!cacheEntry?.failed || !cacheEntry?.ts) return false;
+  return Date.now() - cacheEntry.ts < 24 * 60 * 60 * 1000;
+}
+
+function applyCachedStationCoordinates(station) {
+  const key = getStationGeocodeKey(station);
+  if (!key) return false;
+
+  const cached = APP.geocodeCache[key];
+  if (
+    cached &&
+    Number.isFinite(Number(cached.lat)) &&
+    Number.isFinite(Number(cached.lng))
+  ) {
+    station.lat = Number(cached.lat);
+    station.lng = Number(cached.lng);
+    return true;
+  }
+
+  return false;
+}
+
+function geocodeAddress(address) {
+  return new Promise((resolve) => {
+    if (!APP.geocoder) {
+      resolve(null);
+      return;
+    }
+
+    APP.geocoder.geocode({ address }, (results, status) => {
+      const isOk =
+        status === "OK" || status === window.google?.maps?.GeocoderStatus?.OK;
+      if (!isOk || !Array.isArray(results) || !results[0]?.geometry?.location) {
+        resolve(null);
+        return;
+      }
+
+      const location = results[0].geometry.location;
+      resolve({
+        lat: location.lat(),
+        lng: location.lng(),
+      });
+    });
+  });
+}
+
+async function geocodeStationCoordinates(station) {
+  if (hasCoordinates(station)) return false;
+  if (APP.mapProvider !== "google" || !window.google?.maps) return false;
+  if (!APP.geocoder) APP.geocoder = new google.maps.Geocoder();
+
+  const key = getStationGeocodeKey(station);
+  if (!key) return false;
+
+  const cached = APP.geocodeCache[key];
+  if (hasRecentFailedGeocode(cached)) return false;
+
+  const queries = getStationGeocodeQueries(station);
+  for (const query of queries) {
+    const coords = await geocodeAddress(query);
+    if (!coords) continue;
+
+    station.lat = coords.lat;
+    station.lng = coords.lng;
+    APP.geocodeCache[key] = {
+      lat: coords.lat,
+      lng: coords.lng,
+      ts: Date.now(),
+      query,
+    };
+    return true;
+  }
+
+  APP.geocodeCache[key] = { failed: true, ts: Date.now() };
+  return true;
+}
+
+async function hydrateStationCoordinates(stations) {
+  if (!Array.isArray(stations) || stations.length === 0) return;
+
+  const missingCoords = [];
+  stations.forEach((station) => {
+    if (hasCoordinates(station)) return;
+    if (applyCachedStationCoordinates(station)) return;
+    missingCoords.push(station);
+  });
+
+  if (
+    missingCoords.length === 0 ||
+    APP.mapProvider !== "google" ||
+    !window.google?.maps
+  ) {
+    return;
+  }
+
+  const toGeocode = missingCoords.slice(0, CONFIG.GEOCODE_MAX_PER_CYCLE);
+  let cacheTouched = false;
+
+  for (const station of toGeocode) {
+    const geocoded = await geocodeStationCoordinates(station);
+    if (geocoded) cacheTouched = true;
+  }
+
+  if (cacheTouched) {
+    saveGeocodeCache();
   }
 }
 
@@ -613,9 +1006,9 @@ function updateMapMarkers(stations) {
   }
 
   stations.forEach((s) => {
-    if (!s.lat || !s.lng) return;
+    if (!hasCoordinates(s)) return;
     const effectiveStatus = getEffectiveStatus(s);
-    const position = { lat: s.lat, lng: s.lng };
+    const position = { lat: Number(s.lat), lng: Number(s.lng) };
 
     if (APP.mapProvider === "google") {
       if (APP.markers[s.id]) {
@@ -636,7 +1029,7 @@ function updateMapMarkers(stations) {
       return;
     }
 
-    const leafletPosition = [s.lat, s.lng];
+    const leafletPosition = [Number(s.lat), Number(s.lng)];
     if (APP.markers[s.id]) {
       APP.markers[s.id].setLatLng(leafletPosition);
       APP.markers[s.id].setIcon(createMarkerIcon(effectiveStatus));
@@ -653,16 +1046,18 @@ function updateMapMarkers(stations) {
 
 /** Foca o mapa numa bomba específica */
 function focusStation(station) {
-  if (!APP.map || !station.lat || !station.lng) return;
+  if (!APP.map || !hasCoordinates(station)) return;
 
   if (APP.mapProvider === "google") {
-    APP.map.panTo({ lat: station.lat, lng: station.lng });
+    APP.map.panTo({ lat: Number(station.lat), lng: Number(station.lng) });
     APP.map.setZoom(14);
     openStationPopup(station.id);
     return;
   }
 
-  APP.map.flyTo([station.lat, station.lng], 14, { duration: 1.2 });
+  APP.map.flyTo([Number(station.lat), Number(station.lng)], 14, {
+    duration: 1.2,
+  });
   openStationPopup(station.id);
 }
 
@@ -678,8 +1073,8 @@ function fitMapToStations(
     let firstPoint = null;
 
     stations.forEach((s) => {
-      if (!s.lat || !s.lng) return;
-      const point = { lat: s.lat, lng: s.lng };
+      if (!hasCoordinates(s)) return;
+      const point = { lat: Number(s.lat), lng: Number(s.lng) };
       bounds.extend(point);
       totalPoints += 1;
       if (!firstPoint) firstPoint = point;
@@ -707,8 +1102,8 @@ function fitMapToStations(
   }
 
   const points = stations
-    .filter((s) => s.lat && s.lng)
-    .map((s) => [s.lat, s.lng]);
+    .filter((s) => hasCoordinates(s))
+    .map((s) => [Number(s.lat), Number(s.lng)]);
 
   if (includeUser && APP.userLat !== null && APP.userLng !== null) {
     points.push([APP.userLat, APP.userLng]);
@@ -738,7 +1133,7 @@ function focusMapForCurrentFilter(stations) {
   };
 
   if (APP.activeFilter === "maputo") {
-    if (stations.some((s) => s.lat && s.lng)) {
+    if (stations.some((s) => hasCoordinates(s))) {
       fitMapToStations(stations, { maxZoom: CONFIG.MAPUTO_ZOOM + 1 });
     } else {
       flyTo(
@@ -787,13 +1182,13 @@ function renderList(stations) {
       const effectiveStatus = getEffectiveStatus(s);
       const confirms = (APP.confirmations[s.id] || 0) + (s.confirmations || 0);
       const myConfirmed = !!APP.confirmations[s.id];
-      const reportButton =
-        effectiveStatus === "unknown"
-          ? `
-          <button type="button" class="report-station-btn" data-id="${s.id}" aria-label="Reportar esta bomba">
-            ${renderIcon("report")}<span>Reportar</span>
-          </button>`
-          : "";
+      const reportLabel =
+        effectiveStatus === "unknown" ? "Reportar" : "Editar estado";
+      const reportIcon = effectiveStatus === "unknown" ? "report" : "edit";
+      const reportButton = `
+          <button type="button" class="report-station-btn" data-id="${s.id}" aria-label="${reportLabel} esta bomba">
+            ${renderIcon(reportIcon)}<span>${reportLabel}</span>
+          </button>`;
 
       return `
     <div class="station-card ${effectiveStatus}${stale ? " stale" : ""}"
@@ -879,13 +1274,13 @@ function updateStats(stations) {
   const valid = stations.filter((s) => !isStale(s.timestamp));
   $("#statTotal").textContent = valid.length;
   $("#statAvail").textContent = valid.filter(
-    (s) => s.status === "available",
+    (s) => normalizeStatusValue(s.status) === "available",
   ).length;
   $("#statQueue").textContent = valid.filter(
-    (s) => s.status === "queue",
+    (s) => normalizeStatusValue(s.status) === "queue",
   ).length;
   $("#statEmpty").textContent = valid.filter(
-    (s) => s.status === "empty",
+    (s) => normalizeStatusValue(s.status) === "empty",
   ).length;
 
   const now = new Date();
@@ -916,14 +1311,16 @@ function applyFilters() {
   switch (APP.activeFilter) {
     case "available":
       result = result.filter(
-        (s) => s.status === "available" && !isStale(s.timestamp),
+        (s) =>
+          normalizeStatusValue(s.status) === "available" &&
+          !isStale(s.timestamp),
       );
       break;
     case "no-queue":
       result = result.filter(
         (s) =>
-          s.status === "available" &&
-          (!s.queueSize || s.queueSize === "none") &&
+          normalizeStatusValue(s.status) === "available" &&
+          normalizeQueueValue(s.queueSize || "none") === "none" &&
           !isStale(s.timestamp),
       );
       break;
@@ -938,8 +1335,7 @@ function applyFilters() {
         result = result
           .filter(
             (s) =>
-              s.lat &&
-              s.lng &&
+              hasCoordinates(s) &&
               typeof s.distance === "number" &&
               s.distance <= CONFIG.NEARBY_RADIUS_KM,
           )
@@ -986,7 +1382,7 @@ function requestGeolocation() {
   }
 
   navigator.geolocation.getCurrentPosition(
-    (pos) => {
+    async (pos) => {
       APP.userLat = pos.coords.latitude;
       APP.userLng = pos.coords.longitude;
 
@@ -1056,6 +1452,10 @@ function requestGeolocation() {
       const nearChip = $('[data-filter="near"]');
       if (nearChip) nearChip.disabled = false;
 
+      if (APP.activeFilter === "near") {
+        await hydrateStationCoordinates(APP.stations);
+      }
+
       showToast("Localização captada. Agora pode ver as bombas mais próximas.");
       applyFilters();
     },
@@ -1081,13 +1481,28 @@ function normalizeSheetLabel(value) {
 function buildSheetColumnIndex(columns) {
   const index = {};
   const rules = [
-    { key: "timestamp", patterns: [/timestamp/, /hora/, /data/] },
+    {
+      key: "timestamp",
+      patterns: [/timestamp/, /carimbo/, /data.*hora/, /hora.*data/],
+    },
+    {
+      key: "date",
+      patterns: [/^data$/, /data.*alteracao/, /data.*atualizacao/],
+    },
+    {
+      key: "time",
+      patterns: [/^hora$/, /hora.*alteracao/, /hora.*atualizacao/],
+    },
     { key: "name", patterns: [/nome.*bomba/, /^nome$/] },
     { key: "province", patterns: [/provincia/] },
     { key: "city", patterns: [/cidade/] },
     { key: "neighborhood", patterns: [/bairro/, /zona/] },
     { key: "status", patterns: [/estado/, /status/, /situacao/] },
     { key: "queueSize", patterns: [/fila/, /queue/] },
+    {
+      key: "confirmations",
+      patterns: [/confirma/, /contador.*confirm/, /confirmacoes/, /votos/],
+    },
     { key: "fuelType", patterns: [/combustivel/, /fuel/] },
     { key: "notes", patterns: [/observa/, /nota/, /coment/] },
     { key: "lat", patterns: [/^lat$/, /latitude/] },
@@ -1115,28 +1530,69 @@ function parseCoordinate(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function parseConfirmations(value, fallback = 0) {
+  if (value === null || value === undefined || value === "") return fallback;
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.trunc(value));
+  }
+
+  const text = String(value).trim();
+  if (!text) return fallback;
+
+  // Aceita "12", "12 confirmações", "12.0", "12,0"
+  const match = text.match(/-?\d+(?:[.,]\d+)?/);
+  if (!match) return fallback;
+
+  const parsed = Number(match[0].replace(",", "."));
+  if (!Number.isFinite(parsed)) return fallback;
+
+  return Math.max(0, Math.trunc(parsed));
+}
+
 /** Converte linha da Google Sheets para objeto station */
 function sheetsRowToStation(row, index, colIndex = {}) {
   const cols = row.c || [];
-  const getByIndex = (i) =>
-    typeof i === "number" && cols[i] && cols[i].v != null
-      ? String(cols[i].v)
-      : "";
-  const getByKey = (key) => getByIndex(colIndex[key]);
+  const getCellByIndex = (i) => (typeof i === "number" ? cols[i] || null : null);
+  const cellToText = (cell) => {
+    if (!cell) return "";
+    if (cell.f != null && String(cell.f).trim()) return String(cell.f).trim();
+    if (cell.v == null) return "";
+    return String(cell.v).trim();
+  };
+  const getRawByIndex = (i) => getCellByIndex(i)?.v ?? null;
+  const getTextByIndex = (i) => cellToText(getCellByIndex(i));
+  const getRawByKey = (key) => getRawByIndex(colIndex[key]);
+  const getTextByKey = (key) => getTextByIndex(colIndex[key]);
 
   // fallback por posição mantém compatibilidade com formulários antigos
-  const timestamp =
-    getByKey("timestamp") || getByIndex(0) || new Date().toISOString();
-  const name = getByKey("name") || getByIndex(1) || "Bomba sem nome";
-  const province = getByKey("province") || getByIndex(2) || "";
-  const city = getByKey("city") || getByIndex(3) || "";
-  const neighborhood = getByKey("neighborhood") || getByIndex(4) || "";
-  const status = getByKey("status") || getByIndex(5) || "";
-  const queueSize = getByKey("queueSize") || getByIndex(6) || "none";
-  const fuelType = getByKey("fuelType") || getByIndex(7) || "both";
-  const notes = getByKey("notes") || getByIndex(8) || "";
-  const lat = parseCoordinate(getByKey("lat"));
-  const lng = parseCoordinate(getByKey("lng"));
+  const timestamp = resolveSheetTimestamp({
+    timestampValue: getRawByKey("timestamp"),
+    dateValue: getRawByKey("date"),
+    timeValue: getRawByKey("time"),
+    fallbackValue: getRawByIndex(0),
+  });
+
+  const name = getTextByKey("name") || getTextByIndex(1) || "Bomba sem nome";
+  const province = getTextByKey("province") || getTextByIndex(2) || "";
+  const city = getTextByKey("city") || getTextByIndex(3) || "";
+  const neighborhood = getTextByKey("neighborhood") || getTextByIndex(4) || "";
+  const status = normalizeStatusValue(
+    getTextByKey("status") || getTextByIndex(5) || "",
+  );
+  const queueSize = normalizeQueueValue(
+    getTextByKey("queueSize") || getTextByIndex(6) || "none",
+  );
+  const confirmations = parseConfirmations(
+    getRawByKey("confirmations") ?? getTextByKey("confirmations"),
+    0,
+  );
+  const fuelType = normalizeFuelValue(
+    getTextByKey("fuelType") || getTextByIndex(7) || "both",
+  );
+  const notes = getTextByKey("notes") || getTextByIndex(8) || "";
+  const lat = parseCoordinate(getRawByKey("lat"));
+  const lng = parseCoordinate(getRawByKey("lng"));
 
   return {
     id: `sheet_${index}`,
@@ -1147,9 +1603,9 @@ function sheetsRowToStation(row, index, colIndex = {}) {
     neighborhood,
     status,
     queueSize,
+    confirmations,
     fuelType,
     notes,
-    confirmations: 0,
     lat,
     lng,
   };
@@ -1195,13 +1651,18 @@ async function loadData(showSpinner = true) {
 
     if (!stations) {
       stations = await loadFromSheets();
-      if (stations) cacheStations(stations);
     }
   }
 
   // Fallback para dados mock
   if (!stations || stations.length === 0) {
     stations = MOCK_STATIONS;
+  }
+
+  await hydrateStationCoordinates(stations);
+
+  if (!CONFIG.USE_MOCK && stations?.length) {
+    cacheStations(stations);
   }
 
   APP.stations = stations;
@@ -1234,22 +1695,36 @@ async function submitReport(formData) {
 /* ─────────────────────────────────────────────
    MODAL DO FORMULÁRIO
 ───────────────────────────────────────────── */
-function openModal() {
-  $("#reportStationHint").classList.add("hidden");
+function openModal({ keepHint = false } = {}) {
+  if (!keepHint) $("#reportStationHint").classList.add("hidden");
   $("#reportModal").classList.remove("hidden");
   document.body.style.overflow = "hidden";
   setTimeout(() => $("#f_name").focus(), 100);
 }
 
 function openReportForStation(station) {
-  $("#reportStationHint").classList.remove("hidden");
-  $("#reportStationHint").textContent =
-    `${station.name} não tem classificação recente. Por favor, reporte o estado atual.`;
+  const hint = $("#reportStationHint");
+  const staleOrUnknown =
+    isStale(station.timestamp) || getEffectiveStatus(station) === "unknown";
+  hint.classList.remove("hidden");
+  hint.textContent = staleOrUnknown
+    ? `${station.name} não tem classificação recente. Atualize o estado atual.`
+    : `Atualizar estado de ${station.name}. Os dados atuais já foram preenchidos.`;
+
   $("#f_name").value = station.name || "";
   $("#f_province").value = station.province || "";
   $("#f_city").value = station.city || "";
   $("#f_neighborhood").value = station.neighborhood || "";
-  openModal();
+  $("#f_queue").value = normalizeQueueValue(station.queueSize || "none");
+  $("#f_fuel").value = normalizeFuelValue(station.fuelType || "both");
+  $("#f_notes").value = station.notes || "";
+
+  const statusValue = normalizeStatusValue(station.status);
+  $$("#reportForm input[type='radio']").forEach((radio) => {
+    radio.checked = radio.value === statusValue;
+  });
+
+  openModal({ keepHint: true });
 }
 
 function closeModal() {
@@ -1350,7 +1825,7 @@ function initEventListeners() {
 
   // Chips de filtro
   $$(".chip").forEach((chip) => {
-    chip.addEventListener("click", () => {
+    chip.addEventListener("click", async () => {
       $$(".chip").forEach((c) => c.classList.remove("active"));
       chip.classList.add("active");
       APP.activeFilter = chip.dataset.filter;
@@ -1358,6 +1833,11 @@ function initEventListeners() {
       if (APP.activeFilter === "near" && APP.userLat === null) {
         requestGeolocation();
         showToast("📍 A detectar localização…");
+        return;
+      }
+
+      if (APP.activeFilter === "near") {
+        await hydrateStationCoordinates(APP.stations);
       }
 
       applyFilters();
@@ -1412,6 +1892,7 @@ function initEventListeners() {
           lng: null,
         };
         APP.stations.unshift(tempStation);
+        await hydrateStationCoordinates([tempStation]);
         applyFilters();
       }
 
@@ -1442,8 +1923,10 @@ function startAutoRefresh() {
 ───────────────────────────────────────────── */
 async function init() {
   loadConfirmations();
+  loadGeocodeCache();
   initMap();
   syncFormEntryNamesFromConfig();
+  syncNearChipLabel();
   initEventListeners();
   handleViewportForMapToggle();
   setMobileMapVisible(false);
